@@ -17,14 +17,14 @@ from ...utils.logger import Log
 
 class Package(BaseModel):
     """
-    Subscription package/plan model (Social Media Management SaaS - Hootsuite-style).
+    Subscription package/plan model (Church Management SaaS - ChMeetings-style).
 
     Key goals:
       ✅ No null/None fields saved to MongoDB
       ✅ Safe decrypt (never crash if a field is not encrypted / legacy data)
       ✅ Searchable tiers/status via hashed fields (encryption is non-deterministic)
-      ✅ Supports Enterprise/custom pricing (price=None)
-      ✅ Supports nested "limits" from API payloads via normalize_payload()
+      ✅ Supports custom/enterprise pricing (price=None)
+      ✅ Supports nested "limits" and "addons" from API payloads via normalize_payload()
 
     Notes:
       - We store encrypted fields for privacy.
@@ -36,23 +36,24 @@ class Package(BaseModel):
     # -------------------------
     # Package Tiers
     # -------------------------
-    TIER_STANDARD = "Standard"
-    TIER_ADVANCED = "Advanced"
-    TIER_ENTERPRISE = "Enterprise"
+    TIER_FREE = "Free"
+    TIER_VERY_SMALL = "Very Small"
+    TIER_SMALL = "Small"
+    TIER_MEDIUM = "Medium"
+    TIER_LARGE = "Large"
+    TIER_UNLIMITED = "Unlimited"
 
     # -------------------------
     # Billing Periods
     # -------------------------
     PERIOD_MONTHLY = "monthly"
-    PERIOD_QUARTERLY = "quarterly"
-    PERIOD_YEARLY = "yearly"
-    PERIOD_LIFETIME = "lifetime"
+    PERIOD_ANNUALLY = "annually"
     PERIOD_CUSTOM = "custom"
 
     # -------------------------
     # Price Model
     # -------------------------
-    PRICE_MODEL_PER_USER = "per_user"
+    PRICE_MODEL_FLAT_BY_ACTIVE_PEOPLE = "flat_by_active_people"
     PRICE_MODEL_FLAT = "flat"
     PRICE_MODEL_CUSTOM = "custom"
 
@@ -74,6 +75,7 @@ class Package(BaseModel):
         "currency",
         "status",
         "price",
+        "annual_price",
         "setup_fee",
         "price_model",
     ]
@@ -82,13 +84,12 @@ class Package(BaseModel):
     # Limits keys accepted (PLAIN fields)
     # -------------------------
     LIMIT_KEYS = {
+        "max_admins",
         "max_users",
-        "max_social_accounts",
-        "bulk_schedule_limit",
-        "competitor_tracking",
-        "history_search_days",
-        "monthly_post_limit",
-        "media_storage_gb", 
+        "max_active_people",
+        "max_branches",
+        "online_donations_per_month",
+        "custom_profile_fields",
     }
 
     def __init__(
@@ -97,26 +98,33 @@ class Package(BaseModel):
         tier: str,
         billing_period: str,
         price: Optional[float],
-        currency: str = "GBP",
+        currency: str = "USD",
 
         # Pricing model
-        price_model: str = PRICE_MODEL_PER_USER,
+        price_model: str = PRICE_MODEL_FLAT_BY_ACTIVE_PEOPLE,
+        annual_price: Optional[float] = None,
 
-        # Social limits
+        # Church limits
+        max_admins: Optional[int] = None,
         max_users: Optional[int] = None,
-        max_social_accounts: Optional[int] = None,
-        bulk_schedule_limit: Optional[int] = None,
-        competitor_tracking: Optional[int] = None,
-        history_search_days: Optional[int] = None,
-        monthly_post_limit: Optional[int] = None,
-        media_storage_gb: Optional[int] = None,
+        max_active_people: Optional[int] = None,
+        max_branches: Optional[int] = None,
+        online_donations_per_month: Optional[int] = None,
+        custom_profile_fields: Optional[int] = None,
 
         # Feature flags
         features: Optional[Dict[str, Any]] = None,
 
+        # Add-ons
+        addons: Optional[Dict[str, Any]] = None,
+
+        # Support / migration flags
+        free_data_migration: bool = False,
+        priority_support: bool = False,
+
         # Fees/trial
         setup_fee: float = 0.0,
-        trial_days: int = 0,
+        trial_days: Optional[int] = None,
 
         # Metadata
         description: Optional[str] = None,
@@ -166,19 +174,16 @@ class Package(BaseModel):
         if status:
             self.status = encrypt_data(status)
             self.hashed_status = hash_data(status)
-            
-        if monthly_post_limit is not None:
-            self.monthly_post_limit = int(monthly_post_limit)
-
-        if media_storage_gb is not None:
-            self.media_storage_gb = int(media_storage_gb)
 
         # -------------------------
         # Pricing (ENCRYPTED)
-        # Enterprise/custom can be price=None
+        # Free/custom tiers can have price=None or price=0
         # -------------------------
         if price is not None:
             self.price = encrypt_data(str(price))
+
+        if annual_price is not None:
+            self.annual_price = encrypt_data(str(annual_price))
 
         # setup_fee always stored (encrypted) as string
         self.setup_fee = encrypt_data(str(setup_fee if setup_fee is not None else 0.0))
@@ -186,25 +191,39 @@ class Package(BaseModel):
         # -------------------------
         # Limits (PLAIN for query speed)
         # -------------------------
+        if max_admins is not None:
+            self.max_admins = int(max_admins)
+
         if max_users is not None:
             self.max_users = int(max_users)
 
-        if max_social_accounts is not None:
-            self.max_social_accounts = int(max_social_accounts)
+        if max_active_people is not None:
+            self.max_active_people = int(max_active_people)
 
-        if bulk_schedule_limit is not None:
-            self.bulk_schedule_limit = int(bulk_schedule_limit)
+        if max_branches is not None:
+            self.max_branches = int(max_branches)
 
-        if competitor_tracking is not None:
-            self.competitor_tracking = int(competitor_tracking)
+        if online_donations_per_month is not None:
+            self.online_donations_per_month = int(online_donations_per_month)
 
-        if history_search_days is not None:
-            self.history_search_days = int(history_search_days)
+        if custom_profile_fields is not None:
+            self.custom_profile_fields = int(custom_profile_fields)
 
         # -------------------------
         # Features (PLAIN JSON)
         # -------------------------
         self.features = features or self._default_features_for_tier(tier)
+
+        # -------------------------
+        # Add-ons (PLAIN JSON)
+        # -------------------------
+        self.addons = addons or self._default_addons_for_tier(tier)
+
+        # -------------------------
+        # Support / migration flags (PLAIN)
+        # -------------------------
+        self.free_data_migration = bool(free_data_migration)
+        self.priority_support = bool(priority_support)
 
         # -------------------------
         # Trial + display (PLAIN)
@@ -222,94 +241,154 @@ class Package(BaseModel):
         self.updated_at = datetime.utcnow()
 
     # -----------------------------
-    # Defaults per tier
+    # Default features per tier
     # -----------------------------
     @classmethod
     def _default_features_for_tier(cls, tier: str) -> Dict[str, Any]:
         t = (tier or "").strip().lower()
 
+        # Base features available on ALL plans (including Free)
         base = {
-            "post_scheduling": True,
-            "unlimited_scheduled_posts": True,
-            "best_time_to_post_ai": True,
-            "ai_caption_generator": True,
-            "ai_image_generator": True,
-            "content_templates": True,
+            # People & groups
+            "people_management": True,
+            "groups_management": True,
+            "member_portal": True,
+            "forms": True,
+            "calendar": True,
+            "follow_ups": True,
+            "people_map": False,
+            "profile_attachments": False,
+            "conditional_profile_fields": False,
+            "custom_member_registration": False,
+            "member_portal_builder": False,
 
-            "shared_inbox": True,
-            "dm_automation": True,
-            "brand_monitoring": True,
-            "sentiment_analysis": True,
-            "competitor_benchmarking": True,
-            "team_assignments": True,
+            # Events
+            "event_management": True,
+            "event_registration": True,
+            "paid_events": True,
+            "child_check_in_with_nametags": True,
 
-            "analytics_dashboards": True,
-            "custom_reports": False,
-            "export_reports": False,
-            "scheduled_reports": False,
+            # Scheduling & planning
+            "volunteer_scheduling": True,
+            "service_planning": True,
 
-            "approval_workflows": False,
-            "bulk_upload": False,
-            "routing_and_tagging": False,
-            "auto_responses": False,
-            "custom_permissions": False,
+            # Giving
+            "giving_management": True,
+            "online_giving": True,
+            "pledges": True,
 
+            # Communication
+            "email_broadcasts": True,
+            "email_designer": True,
+            "sms_messaging": False,
+            "push_notifications": False,
+            "scheduled_communications": False,
+
+            # Operations
+            "appointments": True,
+            "accounting": True,
+            "automated_tasks": True,
+            "branch_management": False,
+            "blog": False,
+
+            # Integrations
             "api_access": False,
+            "zapier": False,
+            "mailchimp": False,
+            "payment_gateway": True,
 
-            "sso": False,
-            "enterprise_support": False,
-            "dedicated_success_manager": False,
-            "sla": False,
-
-            "social_listening": False,
-            "review_management": False,
-            "employee_advocacy": False,
-            "crm_integrations": False,
-            "salesforce_integration": False,
+            # Reporting & admin
+            "advanced_reports": False,
+            "users_roles_permissions": True,
+            "mobile_app_access": True,
         }
 
-        if t == "advanced":
+        # Very Small & Small: unlock SMS, push, scheduled comms
+        if t in ("very small", "small"):
             base.update({
-                "custom_reports": True,
-                "export_reports": True,
-                "scheduled_reports": True,
-
-                "approval_workflows": True,
-                "bulk_upload": True,
-                "routing_and_tagging": True,
-                "auto_responses": True,
-                "custom_permissions": True,
-
-                "api_access": True,
+                "sms_messaging": True,
+                "push_notifications": True,
+                "scheduled_communications": True,
             })
 
-        if t == "enterprise":
+        # Medium: add advanced reports, priority support features, integrations
+        if t == "medium":
             base.update({
-                "custom_reports": True,
-                "export_reports": True,
-                "scheduled_reports": True,
-
-                "approval_workflows": True,
-                "bulk_upload": True,
-                "routing_and_tagging": True,
-                "auto_responses": True,
-                "custom_permissions": True,
-
+                "sms_messaging": True,
+                "push_notifications": True,
+                "scheduled_communications": True,
+                "advanced_reports": True,
                 "api_access": True,
+                "zapier": True,
+                "mailchimp": True,
+                "branch_management": True,
+                "blog": True,
+                "member_portal_builder": True,
+                "custom_member_registration": True,
+                "profile_attachments": True,
+                "conditional_profile_fields": True,
+                "people_map": True,
+            })
 
-                "sso": True,
-                "enterprise_support": True,
-                "dedicated_success_manager": True,
-                "sla": True,
+        # Large: same as Medium
+        if t == "large":
+            base.update({
+                "sms_messaging": True,
+                "push_notifications": True,
+                "scheduled_communications": True,
+                "advanced_reports": True,
+                "api_access": True,
+                "zapier": True,
+                "mailchimp": True,
+                "branch_management": True,
+                "blog": True,
+                "member_portal_builder": True,
+                "custom_member_registration": True,
+                "profile_attachments": True,
+                "conditional_profile_fields": True,
+                "people_map": True,
+            })
 
-                "social_listening": True,
-                "review_management": True,
-                "employee_advocacy": True,
-                "crm_integrations": True,
-                "salesforce_integration": True,
+        # Unlimited: everything on
+        if t == "unlimited":
+            base.update({
+                "sms_messaging": True,
+                "push_notifications": True,
+                "scheduled_communications": True,
+                "advanced_reports": True,
+                "api_access": True,
+                "zapier": True,
+                "mailchimp": True,
+                "branch_management": True,
+                "blog": True,
+                "member_portal_builder": True,
+                "custom_member_registration": True,
+                "profile_attachments": True,
+                "conditional_profile_fields": True,
+                "people_map": True,
             })
 
         return base
+
+    # -----------------------------
+    # Default add-ons per tier
+    # -----------------------------
+    @classmethod
+    def _default_addons_for_tier(cls, tier: str) -> Dict[str, Any]:
+        t = (tier or "").strip().lower()
+
+        if t == "free":
+            return {
+                "text_messaging_extra_cost": False,
+                "voice_messaging_extra_cost": False,
+                "branded_church_app_addon": False,
+            }
+
+        return {
+            "text_messaging_extra_cost": True,
+            "voice_messaging_extra_cost": True,
+            "branded_church_app_addon": True,
+        }
 
     # -----------------------------
     # Payload Normalizer (IMPORTANT)
@@ -319,7 +398,9 @@ class Package(BaseModel):
         """
         Accepts API payloads that may contain:
           - limits: {...}
-        Flattens them into top-level fields and removes None values.
+          - addons: {...}
+        Flattens limits into top-level fields and keeps addons as a dict.
+        Removes None values.
 
         This prevents:
           ✅ "limits" being stored as an unexpected dict
@@ -336,7 +417,7 @@ class Package(BaseModel):
                 if k in cls.LIMIT_KEYS and v is not None:
                     payload[k] = v
 
-        # Remove None values at top-level
+        # Remove None values at top-level (but keep addons/features dicts intact)
         payload = {k: v for k, v in payload.items() if v is not None}
         return payload
 
@@ -361,20 +442,23 @@ class Package(BaseModel):
             "price_model": getattr(self, "price_model", None),
 
             "price": getattr(self, "price", None),
+            "annual_price": getattr(self, "annual_price", None),
             "currency": getattr(self, "currency", None),
             "setup_fee": getattr(self, "setup_fee", None),
 
             # limits
+            "max_admins": getattr(self, "max_admins", None),
             "max_users": getattr(self, "max_users", None),
-            "max_social_accounts": getattr(self, "max_social_accounts", None),
-            "bulk_schedule_limit": getattr(self, "bulk_schedule_limit", None),
-            "competitor_tracking": getattr(self, "competitor_tracking", None),
-            "history_search_days": getattr(self, "history_search_days", None),
-            
-            "monthly_post_limit": getattr(self, "monthly_post_limit", None),
-            "media_storage_gb":   getattr(self, "media_storage_gb", None),
+            "max_active_people": getattr(self, "max_active_people", None),
+            "max_branches": getattr(self, "max_branches", None),
+            "online_donations_per_month": getattr(self, "online_donations_per_month", None),
+            "custom_profile_fields": getattr(self, "custom_profile_fields", None),
 
             "features": getattr(self, "features", None),
+            "addons": getattr(self, "addons", None),
+
+            "free_data_migration": getattr(self, "free_data_migration", None),
+            "priority_support": getattr(self, "priority_support", None),
 
             "trial_days": getattr(self, "trial_days", None),
             "is_popular": getattr(self, "is_popular", None),
@@ -393,10 +477,6 @@ class Package(BaseModel):
     # ---------------- INTERNAL HELPER ---------------- #
     @staticmethod
     def _safe_decrypt(value: Any) -> Any:
-        """
-        Decrypt only strings.
-        If decrypt fails (legacy/plaintext/corrupt), return original.
-        """
         if value is None:
             return None
         if not isinstance(value, str):
@@ -428,6 +508,12 @@ class Package(BaseModel):
                 package["price"] = float(package["price"])
             except Exception:
                 package["price"] = None
+
+        if package.get("annual_price") is not None:
+            try:
+                package["annual_price"] = float(package["annual_price"])
+            except Exception:
+                package["annual_price"] = None
 
         if package.get("setup_fee") is not None:
             try:
@@ -501,9 +587,6 @@ class Package(BaseModel):
 
     @classmethod
     def get_by_tier(cls, tier: str):
-        """
-        ✅ Correct query using hashed_tier (NOT encrypt_data(tier)).
-        """
         log_tag = f"[package.py][Package][get_by_tier][{tier}]"
         try:
             collection = db.get_collection(cls.collection_name)
@@ -519,10 +602,6 @@ class Package(BaseModel):
 
     @classmethod
     def update(cls, package_id, business_id, **updates):
-        """
-        Update fields. Removes None values so you don't store nulls.
-        Encrypts sensitive fields and hashes searchable fields.
-        """
         updates = dict(updates or {})
         updates["updated_at"] = datetime.utcnow()
 
@@ -565,6 +644,9 @@ class Package(BaseModel):
         if "price" in updates:
             updates["price"] = encrypt_data(str(updates["price"])) if updates["price"] is not None else None
 
+        if "annual_price" in updates:
+            updates["annual_price"] = encrypt_data(str(updates["annual_price"])) if updates["annual_price"] is not None else None
+
         if "setup_fee" in updates and updates["setup_fee"] is not None:
             updates["setup_fee"] = encrypt_data(str(updates["setup_fee"]))
 
@@ -583,8 +665,9 @@ class Package(BaseModel):
             collection.create_index([("hashed_tier", 1), ("hashed_status", 1)])
             collection.create_index([("hashed_name", 1)])
             collection.create_index([("is_popular", 1)])
-            collection.create_index([("max_social_accounts", 1)])
+            collection.create_index([("max_active_people", 1)])
             collection.create_index([("max_users", 1)])
+            collection.create_index([("max_branches", 1)])
 
             Log.info(f"{log_tag} Indexes created successfully")
             return True
@@ -592,3 +675,6 @@ class Package(BaseModel):
         except Exception as e:
             Log.error(f"{log_tag} Error creating indexes: {str(e)}")
             return False
+
+
+

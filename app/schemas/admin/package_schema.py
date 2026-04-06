@@ -8,14 +8,21 @@ from ...constants.payment_methods import get_all_payment_methods
 # -----------------------------
 # Enums aligned with new Package model
 # -----------------------------
-TIERS = ["Standard", "Advanced", "Enterprise"]
-BILLING_PERIODS = ["monthly", "quarterly", "yearly", "lifetime", "custom"]
-PRICE_MODELS = ["per_user", "flat", "custom"]
+# Tiers
+TIERS = ["Free", "Very Small", "Small", "Medium", "Large", "Unlimited"]
+
+# Billing periods
+BILLING_PERIODS = ["monthly", "annually", "custom"]
+
+# Price models
+PRICE_MODELS = ["flat_by_active_people", "flat", "custom"]
+
+# Statuses
 STATUSES = ["Active", "Inactive", "Deprecated"]
 
 
 class PackageSchema(Schema):
-    """Schema for Package validation (Social Media Management SaaS)."""
+    """Schema for Package validation (Church Management SaaS)."""
     class Meta:
         unknown = EXCLUDE
 
@@ -44,7 +51,7 @@ class PackageSchema(Schema):
     )
 
     price_model = fields.Str(
-        load_default="per_user",
+        load_default="flat_by_active_people",
         validate=validate.OneOf(PRICE_MODELS),
     )
 
@@ -55,8 +62,15 @@ class PackageSchema(Schema):
         error_messages={"invalid": "Price must be a number >= 0 (or null for custom)."},
     )
 
+    annual_price = fields.Float(
+        required=False,
+        allow_none=True,
+        validate=lambda x: (x is None) or (x >= 0),
+        error_messages={"invalid": "Annual price must be a number >= 0 (or null)."},
+    )
+
     currency = fields.Str(
-        load_default="GBP",
+        load_default="USD",
         validate=validate.Length(equal=3),
     )
 
@@ -66,62 +80,51 @@ class PackageSchema(Schema):
     )
 
     trial_days = fields.Int(
-        load_default=0,
-        validate=lambda x: x >= 0,
+        required=False,
+        allow_none=True,
+        validate=lambda x: x >= 0 if x is not None else True,
     )
 
     # ── Limit fields — -1 = unlimited sentinel, null = not set, positive = capped ──
 
+    _limit_validator = lambda x: x == -1 or x > 0 if x is not None else True
+    _limit_error = {"invalid": "Must be -1 (unlimited) or a positive integer."}
+
+    max_admins = fields.Int(
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
+    )
+
     max_users = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
     )
 
-    max_social_accounts = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    max_active_people = fields.Int(
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
     )
 
-    bulk_schedule_limit = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    max_branches = fields.Int(
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
     )
 
-    competitor_tracking = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    online_donations_per_month = fields.Int(
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
     )
 
-    history_search_days = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
-    )
-
-    monthly_post_limit = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
-    )
-
-    media_storage_gb = fields.Int(
-        required=False,
-        allow_none=True,
-        validate=lambda x: x == -1 or x > 0 if x is not None else True,
-        error_messages={"invalid": "Must be -1 (unlimited) or a positive integer."},
+    custom_profile_fields = fields.Int(
+        required=False, allow_none=True,
+        validate=_limit_validator, error_messages=_limit_error,
     )
 
     features = fields.Dict(required=False, load_default={})
+    addons = fields.Dict(required=False, load_default={})
+
+    free_data_migration = fields.Bool(load_default=False)
+    priority_support = fields.Bool(load_default=False)
 
     is_popular = fields.Bool(load_default=False)
     display_order = fields.Int(load_default=0)
@@ -135,7 +138,7 @@ class PackageSchema(Schema):
 class PackageUpdateSchema(Schema):
     """Schema for updating a Package (partial updates allowed)."""
     class Meta:
-        unknown = EXCLUDE  # optional: ignore extra fields instead of failing
+        unknown = EXCLUDE
 
     package_id = fields.Str(
         required=True,
@@ -144,44 +147,37 @@ class PackageUpdateSchema(Schema):
     )
 
     name = fields.Str(required=False, allow_none=True, validate=validate.Length(min=2, max=100))
-
     description = fields.Str(required=False, allow_none=True, validate=validate.Length(max=500))
-
     tier = fields.Str(required=False, allow_none=True, validate=validate.OneOf(TIERS))
-
     billing_period = fields.Str(required=False, allow_none=True, validate=validate.OneOf(BILLING_PERIODS))
-
     price_model = fields.Str(required=False, allow_none=True, validate=validate.OneOf(PRICE_MODELS))
 
-    price = fields.Float(
-        required=False,
-        allow_none=True,
-        validate=lambda x: (x is None) or (x >= 0),
-    )
-
+    price = fields.Float(required=False, allow_none=True, validate=lambda x: (x is None) or (x >= 0))
+    annual_price = fields.Float(required=False, allow_none=True, validate=lambda x: (x is None) or (x >= 0))
     currency = fields.Str(required=False, allow_none=True, validate=validate.Length(equal=3))
-
     setup_fee = fields.Float(required=False, allow_none=True, validate=lambda x: x >= 0)
+    trial_days = fields.Int(required=False, allow_none=True, validate=lambda x: x >= 0 if x is not None else True)
 
-    trial_days = fields.Int(required=False, allow_none=True, validate=lambda x: x >= 0)
+    _limit_validator_update = lambda x: x == -1 or x > 0 if x is not None else True
 
-    max_users = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
-
-    max_social_accounts = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
-
-    bulk_schedule_limit = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
-
-    competitor_tracking = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
-
-    history_search_days = fields.Int(required=False, allow_none=True, validate=lambda x: x > 0 if x else True)
+    max_admins = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
+    max_users = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
+    max_active_people = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
+    max_branches = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
+    online_donations_per_month = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
+    custom_profile_fields = fields.Int(required=False, allow_none=True, validate=_limit_validator_update)
 
     features = fields.Dict(required=False, load_default={})
+    addons = fields.Dict(required=False, load_default={})
+
+    free_data_migration = fields.Bool(required=False, allow_none=True)
+    priority_support = fields.Bool(required=False, allow_none=True)
 
     is_popular = fields.Bool(required=False, allow_none=True)
     display_order = fields.Int(required=False, allow_none=True)
 
     status = fields.Str(required=False, allow_none=True, validate=validate.OneOf(STATUSES))
-
+    
 
 class PackageQuerySchema(Schema):
     """Schema for querying a single Package by ID."""
