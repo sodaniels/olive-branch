@@ -158,7 +158,7 @@ blp_essentials= Blueprint("Essentials", __name__, description="Essentials Manage
 #         # Generate both access token and refresh token using the user object
 #         permissions = None
 #         access_token, refresh_token = generate_tokens(user, permissions)
-#         Token.create_token(client_id, access_token, refresh_token, 190900, 604800)
+#         Token.create_token(client_id, access_token, refresh_token, 190910, 604800)
 
 #         # Token is for 24 hours
 #         return jsonify({'access_token': access_token, 'token_type': 'Bearer', 'expires_in': 86400})

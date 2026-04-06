@@ -172,7 +172,7 @@ def post(self, data):
     # Generate both access token and refresh token using the user object
     permissions = None
     access_token, refresh_token = generate_tokens(user, permissions)
-    Token.create_token(client_id, access_token, refresh_token, 190900, 604800)
+    Token.create_token(client_id, access_token, refresh_token, 190910, 604800)
 
     # Token is for 24 hours
     return jsonify({'access_token': access_token, 'token_type': 'Bearer', 'expires_in': 86400})
@@ -1179,7 +1179,7 @@ class SubscriberRegistrationInitiateEmailVerificationResource(MethodView):
                     "schema": SubscriberRegistrationEmailSchema,  # Schema for verifying business email
                     "example": {
                         "agent_id": "67ff9e32272817d5812ab2fc",  # Example agent ID (ObjectId)
-                        "return_url": "http://localhost:9090/redirect"  # Example return URL
+                        "return_url": "http://localhost:9091/redirect"  # Example return URL
                     }
                 }
             },

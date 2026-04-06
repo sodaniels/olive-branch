@@ -12,7 +12,7 @@ class RequestUtility(object):
     
     def __init__(self):
         self.env = os.getenv("APP_ENV", 'development')
-        self.base_url = "http://localhost:9090"
+        self.base_url = "http://localhost:9091"
         self.expected_status_code = 200
     
     def assert_status_code(self, url, expected_status_code):

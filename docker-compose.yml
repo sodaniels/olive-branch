@@ -10,7 +10,7 @@ services:
       dockerfile: docker/app.Dockerfile
 
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9091:9091"
 
     env_file:
       - .env
@@ -29,7 +29,7 @@ services:
       # OLLAMA_HOST: http://ollama:11434
 
       APP_LOG_DIR: /app/storage/logs
-      PORT: 9090
+      PORT: 9091
 
     depends_on:
       redis:
@@ -40,7 +40,7 @@ services:
     command: >
       sh -c "
       gunicorn wsgi:application
-      -b 0.0.0.0:9090
+      -b 0.0.0.0:9091
       --workers 4
       --timeout 120
       --log-level info

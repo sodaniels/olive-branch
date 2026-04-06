@@ -11,7 +11,7 @@ from src.configs.hosts_config import (
 class RequestUtility:
     def __init__(self):
         self.env = os.getenv("APP_ENV", 'development')
-        self.base_url = "http://localhost:9090"
+        self.base_url = "http://localhost:9091"
         self.status_code = None
         self.rs_json = None
         self.timeout = 60  # seconds

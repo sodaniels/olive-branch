@@ -324,7 +324,7 @@ class SystemUserResource(MethodView):
                                     "outlet": "Store 1",
                                     "role": "Manager",
                                     "status": "Active",
-                                    "image": "http://localhost:9090/uploads/user-image.jpg"
+                                    "image": "http://localhost:9091/uploads/user-image.jpg"
                                 }
                             ]
                         }
@@ -2374,7 +2374,7 @@ class AgentRegistrationInitiateEmailVerificationResource(MethodView):
                     "schema": AgentRegistrationBusinessEmailSchema,  # Schema for verifying business email
                     "example": {
                         "agent_id": "67ff9e32272817d5812ab2fc",  # Example agent ID (ObjectId)
-                        "return_url": "http://localhost:9090/redirect"  # Example return URL
+                        "return_url": "http://localhost:9091/redirect"  # Example return URL
                     }
                 }
             },

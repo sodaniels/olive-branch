@@ -21,6 +21,6 @@ COPY . .
 
 
 # Expose the application port
-EXPOSE 9090
+EXPOSE 9091
 
 # Default command removed here; handled by docker-compose.yml

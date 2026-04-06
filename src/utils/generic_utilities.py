@@ -479,7 +479,7 @@ def generate_business_payload(tenant_id=None,  business_name=None, start_date=No
     country = country or _country
     city = city or _city
     state = state or _state
-    website = website or "http://localhost:9090"
+    website = website or "http://localhost:9091"
     postcode = postcode or generate_random_postcode()
     currency = currency or generate_random_currency()
     alternate_contact_number = alternate_contact_number or generate_contact_number()
@@ -489,7 +489,7 @@ def generate_business_payload(tenant_id=None,  business_name=None, start_date=No
     last_name2 = last_name2 or generate_lastname_name2()
     store_url = store_url or f"{business_name.lower().replace(' ', '')}com"
     package = package or 'Basic'
-    return_url = return_url or 'http://localhost:9090/return'
+    return_url = return_url or 'http://localhost:9091/return'
     id_type = generate_id_type()
     id_number = generate_id_number()
     image_url = generate_image_url()

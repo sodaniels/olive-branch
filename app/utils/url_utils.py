@@ -17,7 +17,7 @@ def generate_forgot_password_token(return_url, token):
         Full URL with token parameter
     """
     # Build callback URL
-    callback_base = os.getenv("BACK_END_BASE_URL", "http://localhost:9090")
+    callback_base = os.getenv("BACK_END_BASE_URL", "http://localhost:9091")
     callback_url = f"{callback_base}/social/api/v1/auth/reset-password/callback"
     
     # Add token and return_url as query parameters
