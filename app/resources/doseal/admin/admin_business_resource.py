@@ -1,0 +1,2262 @@
+
+# app/resources/admin/admin_business_resource.py
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import uuid
+import bcrypt, jwt, os, time, secrets, json
+from functools import wraps
+from redis import Redis
+from functools import wraps
+from flask import current_app, g
+from flask_smorest import Blueprint, abort
+from flask.views import MethodView
+from flask import jsonify, request
+from ....utils.helpers import make_log_tag
+from pymongo.errors import PyMongoError
+from marshmallow import ValidationError
+from rq import Queue
+
+from ....models.admin.super_superadmin_model import (
+    Admin
+)
+from datetime import datetime, timedelta
+# from app import queue
+from ....models.business_model import Business
+from ....schemas.business_schema import (
+    BusinessSchema, BusinessUpdateSchema
+)
+from ....schemas.business_schema import OAuthCredentialsSchema
+from ....schemas.login_schema import (
+    LoginInitiateSchema, 
+    LoginExecuteSchema,
+    LoginExecuteResponseSchema,
+    LoginInitiateResponseSchema,
+    ForgotPasswordInitiateSchema,
+    ResetPasswordSchema,
+)
+from ....schemas.social.change_password_schema import ChangePasswordSchema
+from ....schemas.social.email_verification_schema import BusinessEmailVerificationSchema
+
+from ....utils.helpers import generate_tokens
+from ....models.business_model import Client, Token
+from ....models.user_model import User
+from ....models.admin.super_superadmin_model import Role
+from ....models.notifications.notification_settings import NotificationSettings
+from ....models.social.password_reset_token import PasswordResetToken
+from ....schemas.social.change_password_schema import ChoosePasswordSchema
+
+from ....utils.logger import Log # import logging
+from ....utils.generators import generate_client_id, generate_client_secret
+from ....utils.crypt import encrypt_data, decrypt_data, hash_data
+from ....utils.json_response import prepared_response
+from ....utils.calculation_engine import hash_transaction
+from ....utils.redis import (
+    set_redis_with_expiry, set_redis, get_redis, remove_redis
+)
+from ....utils.generators import generate_otp
+from ....utils.generators import generate_return_url_with_payload
+
+from ....constants.service_code import (
+    HTTP_STATUS_CODES, SYSTEM_USERS, BUSINESS_FIELDS
+)
+
+
+from ....services.email_service import (
+    send_user_registration_email,
+    send_new_contact_sale_email,
+    send_password_changed_email,
+    send_otp_email,
+    send_forgot_password_email
+)
+from ....utils.media.cloudinary_client import (
+    upload_image_file, upload_video_file
+)
+
+from ....utils.generators import (
+    generate_reset_token,
+    generate_confirm_email_token,
+    generate_confirm_email_token_init_registration
+)
+
+from ....utils.helpers import (
+    validate_and_format_phone_number, create_token_response_admin, 
+    generate_tokens, safe_decrypt, stringify_object_ids
+)
+from ....utils.file_upload import upload_file
+
+from ....utils.rate_limits import (
+    login_ip_limiter, login_user_limiter,
+    register_rate_limiter, logout_rate_limiter,
+    profile_retrieval_limiter,
+    forgot_password_rate_limiter,
+)
+from ....utils.generators import generate_registration_verification_token
+from ....utils.helpers import resolve_target_business_id_from_payload
+from ....services.seeders.social_role_seeder import SocialRoleSeeder
+from ....utils.url_utils import generate_forgot_password_token
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+SECRET_KEY = os.getenv("SECRET_KEY") 
+
+REDIS_HOST = os.getenv("REDIS_HOST")
+connection = Redis(host=REDIS_HOST, port=6379)
+queue = Queue("emails", connection=connection)
+
+blp_business_auth = Blueprint("Business Auth", __name__, url_prefix="/v1/auth", description="Authentication Management")
+blp_admin_preauth = Blueprint("Admin Pre Auth", __name__, url_prefix="/v1/auth", description="Admin Pre Auth Management")
+
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Get the Authorization header
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            abort(401, message="Authentication Required")
+
+        token = auth_header.split()[1]
+        user = dict()
+        s_user = {}
+        log_tag = f"[business_resources.py][token_required]"
+
+        try:
+            # Decode the access token
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+
+            try:
+                user = User.get_user_by_user__id(data.get("user_id"))
+            except Exception as e:
+                Log.info(f"{log_tag} error retrieving user: {str(e)}")
+            
+            if user is None:
+                abort(401, message="Invalid access token")
+                
+            try:
+                s_user = User.get_system_user_by__id(user.get("system_user_id"))
+                if s_user:
+                    user["agent_id"] = s_user.get("agent_id")
+            except Exception as e:
+                Log.info(f"{log_tag} system user error: {str(e)}")
+
+            # Clean up sensitive data
+            user.pop('password', None)
+            user.pop('email_hashed', None)
+            user.pop('client_id_hashed', None)
+            user.pop('email_verified', None)
+            user.pop('updated_at', None)
+            user.pop('pin', None)
+            
+            account_type = decrypt_data(user.get("account_type"))
+            # Log.info(f"{log_tag}: account_type: {account_type}" )
+            
+            if account_type not in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]):
+                permissions = data.get('permissions')
+                user['permissions'] = permissions
+                user['account_type'] = account_type
+            else:
+                user['account_type'] = account_type
+
+            g.current_user = user
+
+        except jwt.ExpiredSignatureError:
+            # Handle expired access token
+            refresh_token = None
+            
+            # Try to get refresh token from different sources
+            if request.is_json and request.json:
+                refresh_token = request.json.get('refresh_token')
+            elif request.form:
+                refresh_token = request.form.get('refresh_token')
+            elif request.headers.get('X-Refresh-Token'):
+                refresh_token = request.headers.get('X-Refresh-Token')
+            
+            if not refresh_token:
+                abort(401, message="Token expired, and no refresh token provided")
+            
+            try:
+                # Decode and verify the refresh token
+                refresh_data = jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"])
+                
+                # Get user data for the new token
+                user_id = refresh_data['user_id']
+                
+                new_access_token = jwt.encode({
+                    'user_id': user_id,
+                    'account_type': refresh_data.get('account_type'),  # Include account_type if needed
+                    'exp': datetime.utcnow() + timedelta(minutes=15)
+                }, SECRET_KEY, algorithm='HS256')
+
+                # Update token in database
+                Token.create_token(user_id, new_access_token, refresh_token, 900, 604800)
+                
+                # Get user data and set g.current_user
+                try:
+                    user = User.get_user_by_user__id(user_id)
+                    if user:
+                        # Clean up and set user data (same as above)
+                        user.pop('password', None)
+                        user.pop('email_hashed', None)
+                        user.pop('client_id_hashed', None)
+                        user.pop('email_verified', None)
+                        user.pop('updated_at', None)
+                        
+                        try:
+                            role = Role.get_by_id(user.get("role"))
+                            if role is not None:
+                                permissions = role.get('permissions')
+                                user['permissions'] = permissions
+                                user['account_type'] = refresh_data.get('account_type')
+                        except:
+                            Log.error("Failed to get role for user_id: %s")
+                        
+                        g.current_user = user
+                        
+                        # Add new token to response headers
+                        response = make_response(f(*args, **kwargs))
+                        response.headers['X-New-Access-Token'] = new_access_token
+                        return response
+                        
+                except Exception as e:
+                    Log.error(f"Error getting user data after token refresh: {str(e)}")
+                    abort(401, message="Invalid user")
+
+            except jwt.InvalidTokenError:
+                abort(401, message="Invalid or expired refresh token")
+            except Exception as e:
+                Log.error(f"Error during token refresh: {str(e)}")
+                abort(401, message="Token refresh failed")
+
+        except jwt.InvalidTokenError:
+            abort(401, message="Invalid access token")
+
+        # Check if the token exists in MongoDB
+        stored_token = Token.get_token(token)
+        if not stored_token:
+            abort(401, message="Invalid token")
+
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+#-------------------------------------------------------
+# REGISTER
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/register", methods=["POST"])
+class RegisterBusinessResource(MethodView):
+    
+    @register_rate_limiter("registration")
+    @blp_business_auth.arguments(BusinessSchema, location="form")
+    @blp_business_auth.response(201, BusinessSchema)
+    @blp_business_auth.doc(
+        summary="Add a new business entry with details",
+        description="This endpoint allows business to register a new business with details like full name, email, phone number, company name, store URL, and user password. A valid authentication token is required for authorization.",
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": BusinessSchema,
+                    "example": {
+                        "fullname": "John Doe",
+                        "email": "johndoe@example.com",
+                        "phone_number": "1234567890",
+                        "company_name": "Doe Enterprises",
+                        "store_url": "doeenterprises",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            201: {
+                "description": "Business created successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "message": "Business created successfully",
+                            "status_code": 200,
+                            "success": True
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid request data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication token"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self, business_data):
+        client_ip = request.remote_addr
+        
+        log_tag = f"[business_resource.py][RegisterBusinessResource][post][{client_ip}]"
+        
+        account_type = SYSTEM_USERS["BUSINESS_OWNER"]
+        
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"{log_tag} invalid x-app-key headers")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        # Check if the business already exists based on email item_data["business_id"], key="name", value=item_data["name"]
+        if Business.check_item_exists(key="email", value=business_data["email"]):
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["CONFLICT"],
+                "message": "Business account already exists", 
+            }), HTTP_STATUS_CODES["CONFLICT"]
+
+        business_data["password"] = bcrypt.hashpw(
+            business_data["password"].encode("utf-8"),
+            bcrypt.gensalt()
+        ).decode("utf-8")
+        
+        user_data = {}
+        
+        user_data["fullname"] = f"{business_data.get('first_name', '')} {business_data.get('last_name', '')}".strip()
+        user_data["email"] = business_data.get('email')
+        user_data["phone_number"] = business_data.get('business_contact')
+        user_data["password"] = business_data.get('password')
+        user_data["device_id"] = business_data.get('device_id')
+        user_data["ip_address"] = client_ip
+        user_data["account_type"] = account_type
+        
+        business_data["password"] = business_data.get('password')
+        
+        account_status = [
+                {
+                    "account_created": {
+                        "created_at": str(datetime.utcnow()),
+                        "status": True,
+                    },
+                },
+                {
+                    "business_email_verified": {
+                        "status": False,
+                    }
+                },
+                {
+                    "subscribed_to_package": {
+                        "status": False,
+                    }
+                }
+            ]
+                            
+        business_data["account_status"] = account_status
+        
+        
+        # Create a new user instance
+        business = Business(**business_data)
+
+        # Try saving the business to MongoDB and handle any errors
+        try:
+            # send email after successful signup
+            Log.info(f"{log_tag} [{business_data['business_name']}][committing assignment history")
+            # committing business data to db
+            
+            # Record the start time
+            start_time = time.time()
+            
+            (client_id, tenant_id, business_id, email) = business.save()
+      
+            # Handle logo image upload
+            actual_path = None
+            if 'image' in request.files:
+                image = request.files['image']
+                try:
+                    # Use the upload function to upload the logo
+                    image_path, actual_path = upload_file(image, business_id)
+                    result = Business.update_business_image(user_data['email'], image_path, actual_path)
+                    if result:
+                        Log.info(f"{log_tag} image upload success: {result}")
+                    else:
+                        Log.info(f"{log_tag} image upload failed: {result}")
+                except ValueError as e:
+                    Log.info(f"{log_tag} image upload error: {e}")
+            
+            
+            # Record the end time
+            end_time = time.time()
+            
+            # Calculate the duration
+            duration = end_time - start_time
+            
+            # Log the response and time taken
+            Log.info(f"{log_tag} commit business completed in {duration:.2f} seconds")
+            
+            if client_id:
+                
+                user_data["tenant_id"] = tenant_id
+                user_data["client_id"] = client_id
+                user_data["business_id"] = business_id
+     
+                try:
+                    Log.info(f"{log_tag}[committing business information")
+                    # committing user data to db
+                    user = User(**user_data)
+                    user_client_id = user.save()
+                    
+                    if user_client_id:
+                        
+                        # seed notifications
+                        try:
+                            NotificationSettings.seed_for_user(
+                                business_id=str(business_id),
+                                user__id=str(user_client_id),
+                            )
+                        except Exception as e:
+                            Log.info(f"{log_tag} Error seeding notifictions: {e}")
+                        
+                        #Seed roles for business
+                        try:
+                            SocialRoleSeeder.seed_defaults(
+                                business_id=str(business_id),
+                                admin_user__id=str(user_client_id) if isinstance(user_client_id, str) else str(user_client_id),
+                                admin_user_id=str(user_data.get("user_id") or ""),
+                                admin_email=str(user_data.get("email") or ""),
+                                admin_name=str(user_data.get("fullname") or "Admin"),
+                            )
+                        except Exception as e:
+                            Log.info(f"{log_tag} default social roles seeding failed: {e}")
+                            
+                        #update business with user_id
+                        try:
+                            data = {
+                                "user_id": user_client_id
+                            }
+                            update_business = Business.update_business_with_user_id(business_id, **data)
+                            Log.info(f"{log_tag}\t respone updating business with user_id")
+                        except Exception as e:
+                            Log.info(f"{log_tag}\t error updating business with user_id: {e}")
+                        
+                         #create a client secret
+                        client_secret = generate_client_secret()
+                        Client.create_client(client_id, client_secret)
+                        
+                        try:
+                            return_url= business_data["return_url"]
+                            token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+                            reset_url = generate_confirm_email_token_init_registration(return_url, token)
+            
+                            update_code = User.update_auth_code(business_data["email"], token)
+                            
+                            if update_code:
+                                Log.info(f"{log_tag}\t reset_url: {reset_url}")
+                                try:
+                                    result = send_user_registration_email(
+                                        business_data["email"], 
+                                        user_data["fullname"], 
+                                        reset_url
+                                    )
+                                    Log.info(f"Email sent result={result}")
+                                except Exception as e:
+                                    Log.error(f"Email sending failed: {e}")
+                                    raise
+                        except Exception as e:
+                            Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+                        
+                        try:
+                            send_new_contact_sale_email(
+                                to_admins=["opokudaniels@yahoo.com", "dosealltd@gmail.com"],
+                                admin_name="Samuel Daniels",
+                                requester_email=user_data["email"],
+                                requester_fullname=user_data["fullname"],
+                                requester_phone_number=user_data["phone_number"],
+                                company_name=business_data["business_name"],
+                                cc_admins=["samuel@doseal.org"],
+                            )
+                        except Exception as e:
+                            Log.error(f"{log_tag} error sending admin emails: {e}")
+                        
+                        return jsonify({
+                            "success": True,
+                            "status_code": HTTP_STATUS_CODES["OK"],
+                            "message": "Business created successfully.", 
+                        }), HTTP_STATUS_CODES["OK"]
+                        
+                    
+                except Exception as e:
+                    Log.info(f"{log_tag} An error occurred while creating user: {e}")
+                    # Create a new user instance
+                    return jsonify({
+                        "success": False,
+                        "status_code": HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"],
+                        "message": "An unexpected error occurred",
+                        "error": str(e)
+                    }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+                
+        except PyMongoError as e:
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"],
+                "message": "An error occurred",
+                "error": str(e)
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+        except Exception as e:
+             return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"],
+                "message": "An unexpected error occurred",
+                "error": str(e)
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+
+@blp_business_auth.route("/auth/register", methods=["PATCH"])
+class UpdateBusinessResource(MethodView):
+
+    @token_required
+    @blp_business_auth.arguments(BusinessUpdateSchema, location="form")
+    @blp_business_auth.response(200, BusinessUpdateSchema)
+    def patch(self, item_data):
+        client_ip = request.remote_addr
+        user = g.get("current_user", {}) or {}
+
+        business_id = str(user.get("business_id", ""))
+        user__id = str(user.get("_id", ""))
+        account_type = user.get("account_type")
+
+        log_tag = make_log_tag(
+            "admin_business_resource.py",
+            "UpdateBusinessResource",
+            "patch",
+            client_ip,
+            user__id,
+            account_type,
+            business_id,
+            business_id,
+        )
+        
+        try:
+            business = Business.get_business_by_id(business_id)
+            
+            if business is None:
+                Log.info(f"{log_tag} Business not found.")
+                return prepared_response(False,"NOT_FOUND","Business not found.")
+        except Exception as e:
+            Log.info(f"{log_tag} Error. retrieving business: {str(e)}")
+            
+        image = request.files["image"]
+        if (image is not None) and (image.filename == ""):
+            return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        if not (image.mimetype).startswith("image/"):
+            return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        business_id = str(user.get("business_id") or "")
+        user_id = str(user.get("_id") or "")
+        if not business_id or not user_id:
+            return jsonify({"success": False, "message": "Unauthorized"}), HTTP_STATUS_CODES["UNAUTHORIZED"]
+
+        
+        try:
+            uploaded_payload = None
+            folder = f"profile/{business_id}/{user_id}"
+            public_id = uuid.uuid4().hex
+            Log.info(f"{log_tag} Uploading profile image for business_id: {business_id}, user_id: {user_id}, filename: {image.filename}")
+            uploaded = upload_image_file(image, folder=folder, public_id=public_id)
+            raw = uploaded.get("raw") or {}
+            
+            if uploaded is not None:
+                
+                uploaded_payload = {
+                    "asset_id": uploaded.get("public_id"),
+                    "public_id": uploaded.get("public_id"),
+                    "asset_provider": "cloudinary",
+                    "asset_type": "image",
+                    "url": uploaded.get("url"),
+
+                    "width": raw.get("width"),
+                    "height": raw.get("height"),
+                    "format": raw.get("format"),
+                    "bytes": raw.get("bytes"),
+                    "created_at": _utc_now().isoformat(),
+                }
+            
+        except Exception as e:
+            Log.info(f"{log_tag} Error uploading profile image: {str(e)}")
+        
+        
+        # Only these three fields are patchable
+        ALLOWED_FIELDS = {"business_name", "first_name", "last_name", "phone_number", "image"}
+
+        updates = {k: v for k, v in item_data.items() if k in ALLOWED_FIELDS and v is not None}
+
+        if not updates:
+            Log.info(f"{log_tag} No patchable fields provided")
+            message = f"Nothing to update. Allowed fields: {', '.join(ALLOWED_FIELDS)}"
+            return prepared_response(False,"BAD_REQUEST", message)
+        
+        if uploaded_payload is not None:
+            updates["image"] = uploaded_payload
+
+        try:
+            start_time = time.time()
+
+            result = Business.update_business(business_id, **updates)
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
+
+            if not result:
+                Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
+                return prepared_response(False,"changes", "Business not found or no changes made.")
+            
+            try:
+                #logout user
+                auth_header = request.headers.get('Authorization')
+                access_token = auth_header.split(' ')[1]
+                Token.delete_token(access_token)
+            except Exception as e:
+                Log.info(f"{log_tag} Business account logged out.")
+                
+
+            return jsonify({
+                "success": True,
+                "status_code": HTTP_STATUS_CODES["OK"],
+                "message": "Business updated successfully",
+                "data": updates,
+            }), HTTP_STATUS_CODES["OK"]
+
+        except Exception as e:
+            Log.error(f"{log_tag} Exception: {e}")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"],
+                "message": "An unexpected error occurred",
+                "error": str(e),
+            }), HTTP_STATUS_CODES["INTERNAL_SERVER_ERROR"]
+
+#-------------------------------------------------------
+# LOGIN INITIATE
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/login/initiate", methods=["POST"])
+class LoginBusinessInitiateResource(MethodView):
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
+    @blp_business_auth.arguments(LoginInitiateSchema, location="form")
+    @blp_business_auth.response(200, LoginInitiateResponseSchema)
+    @blp_business_auth.doc(
+        summary="Login (Step 1): Initiate OTP",
+        description=(
+            "Step 1 of login.\n\n"
+            "Validates email + password, then sends a 6-digit OTP to the user's email.\n"
+            "OTP expires in 5 minutes.\n\n"
+            "Step 2: Call `/auth/login/execute` with email + otp."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
+        requestBody={
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": LoginInitiateSchema,
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "password": "SecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "OTP sent to email",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "OTP has been sent to email",
+                            "message_to_show": "We sent an OTP to your email address. Please provide it to proceed."
+                        }
+                    }
+                },
+            },
+            401: {
+                "description": "Unauthorized (invalid app key OR invalid email/password OR revoked access)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid email or password"
+                        }
+                    }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Internal error"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    def post(self, user_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][LoginBusinessInitiateResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[admin_business_resource.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        email = user_data.get("email")
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(email)
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{email}]: login email does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Invalid email or password",
+            )
+           
+        business_id = user.get("business_id")
+           
+        
+        # Check if the user's credentials are not correct
+        if not User.verify_password(email, user_data["password"]):
+            Log.info(f"{log_tag} [{client_ip}][{email}]: email and password combination failed")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Invalid email or password",
+            }), HTTP_STATUS_CODES["UNAUTHORIZED"]
+            
+            
+        Log.info(f"{log_tag} [{client_ip}][{email}]: login info matched")
+        
+        business_id = str(user.get("business_id"))
+        business = Business.get_business_by_id(business_id)
+        if not business: 
+            Log.info(f"{log_tag} Use was not found to belong to any business")
+            abort(401, message="Your access has been revoked. Contact your administrator")
+            
+        
+        try:
+            test_email = os.getenv("EMAIL_FOR_TESTING")
+            
+            app_name = os.getenv("APP_NAME", "Schedulefy")
+            
+            redisKey = f'login_otp_token_{email}'
+            
+            pin = None
+            
+            # needed for automated testing
+            if (email == test_email):
+                testing_otp = os.getenv("AUTOMATED_TEST_OTP", "200300")
+                pin = testing_otp
+            else:
+                pin = generate_otp()
+            
+            fullname = decrypt_data(business.get("first_name")) + " " +decrypt_data(business.get("last_name"))
+            
+            message = f'Your {app_name} security code is {pin} and expires in 5 minutes. If you did not initiate this, DO NOT APPROVE IT.'
+            
+            set_redis_with_expiry(redisKey, 300, pin)
+            
+            try:
+                result = send_otp_email(
+                    email=email,
+                    otp=pin,
+                    message=message,
+                    fullname=fullname,
+                    expiry_minutes=5,
+                )
+                Log.info(f"Login Email sent result={result}")
+            except Exception as e:
+                Log.error(f"Login Email sending failed: {e}")
+                raise
+            
+            return jsonify({
+                "success": True,
+                "status_code": HTTP_STATUS_CODES["OK"],
+                "message": "OTP has been sent to email",
+                "message_to_show": "We sent an OTP to your email address. Please provide it to proceed.",
+            }), HTTP_STATUS_CODES["OK"]
+        except Exception as e:
+            Log.error(f"{log_tag} Error occurred: {str(e)}")
+            
+#-------------------------------------------------------
+# LOGIN EXECUTE
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/login/execute", methods=["POST"])
+class LoginBusinessExecuteResource(MethodView):
+    @login_ip_limiter("login")
+    @login_user_limiter("login")
+    @blp_business_auth.arguments(LoginExecuteSchema, location="form")
+    @blp_business_auth.response(200, LoginExecuteResponseSchema)
+    @blp_business_auth.doc(
+        summary="Login (Step 2): Verify OTP and Issue Token",
+        description=(
+            "Step 2 of login.\n\n"
+            "Verifies the OTP sent in Step 1 and returns an access token.\n"
+            "OTP expires in 5 minutes.\n\n"
+            "Requires `x-app-key` header."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
+        requestBody={
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": LoginExecuteSchema,
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "otp": "200300"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "OTP verified, access token issued",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Login successful",
+                            "access_token": "your_access_token_here",
+                            "token_type": "Bearer",
+                            "expires_in": 86400
+                        }
+                    }
+                },
+            },
+            401: {
+                "description": "Unauthorized (invalid app key OR invalid/expired OTP OR revoked access)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "The OTP has expired"
+                        }
+                    }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Internal error"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    def post(self, user_data):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][LoginBusinessExecuteResource][post]'
+        Log.info(f"{log_tag} [{client_ip}][{user_data['email']}] initiating loging request")
+        
+        client_ip = request.remote_addr
+    
+        # Check if x-app-ky header is present and valid
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.info(f"[admin_business_resource.py][get_countries][{client_ip}] invalid x-app-ky header")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["UNAUTHORIZED"],
+                "message": "Unauthorized request."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["UNAUTHORIZED"]
+        
+        email = user_data.get("email")
+        
+        
+    
+        # Check if the user exists based on email
+        user = User.get_user_by_email(email)
+        if user is None:
+           Log.info(f"{log_tag} [{client_ip}][{email}]: login email does not exist")
+           return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Invalid email or password",
+            )
+           
+        try:
+            business_id = str(user.get("business_id"))
+            business = Business.get_business_by_id(business_id)
+            if not business: 
+                Log.info(f"{log_tag} Use was not found to belong to any business")
+                abort(401, message="Your access has been revoked. Contact your administrator")
+                
+            account_type = business.get("account_type")
+
+            # when user was not found
+            if user is None:
+                Log.info(f"{log_tag}[{client_ip}] user not found.") 
+                return prepared_response(False, "NOT_FOUND", f"User not found.")
+            
+            
+            otp = user_data.get("otp")
+            
+            redisKey = f'login_otp_token_{email}'
+            
+            token_byte_string = get_redis(redisKey)
+            
+            if not token_byte_string:
+                Log.info(f"{log_tag} The OTP has expired")
+                return prepared_response(False, "UNAUTHORIZED", f"The OTP has expired")
+            
+            # Decode the byte string and convert to integer
+            token = token_byte_string.decode('utf-8')
+            
+            # Check if OTP is valid else send an invalid OTP response
+            if str(otp) != str(token):
+                Log.info(f"{log_tag}[otp: {otp}][token: {token}] verification failed" )
+                return prepared_response(False, "UNAUTHORIZED", f"The OTP is not valid")
+            
+            # remove otp from redis
+            remove_redis(redisKey)
+            Log.info(f"{log_tag} verification otp applied")
+            
+            
+            #logout from all other devices logged in with this account
+            try:
+                # Delete or invalidate the token from database
+                user_id = str(user.get("_id"))
+                tokens = Token.get_tokens(user_id)
+                for token in tokens:
+                    if token is not None:
+                        access_token = token.get("access_token")
+                        token_deleted = Token.delete_token(access_token)
+                        if token_deleted:
+                            Log.info(f"{log_tag} [{client_ip}]: old token invalidated.")
+                        else:
+                            Log.info(f"{log_tag}[{client_ip}]: token invalidation failed.")
+            except Exception as e:
+                Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
+                
+            
+            # proceed to create token when user payload was created
+            return create_token_response_admin(
+                user=user,
+                account_type=account_type,
+                client_ip=client_ip, 
+                log_tag=log_tag, 
+            )
+        except Exception as e:
+            Log.error(f"{log_tag} An error occurred: {str(e)}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An error occurred: {str(e)}")
+  
+
+
+#-------------------------------------------------------
+# CHANGE PASSWORD
+#------------------------------------------------------- 
+@blp_business_auth.route("/change-password", methods=["POST"])
+class ChangePasswordResource(MethodView):
+
+    @profile_retrieval_limiter("change_password")
+    @token_required
+    @blp_business_auth.arguments(ChangePasswordSchema, location="form")
+    @blp_business_auth.doc(
+        summary="Change password for the current authenticated user",
+        description="""
+            Change the password of the currently authenticated user.
+
+            **How it works**
+            - The user must provide `current_password` and `new_password`.
+            - The API verifies `current_password` against the stored bcrypt hash.
+            - If valid, the API hashes `new_password` and updates the user record.
+
+            **Notes**
+            - Requires a valid Bearer token.
+            - Password update is enforced within the resolved business scope.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ChangePasswordSchema,
+                    "example": {
+                        "current_password": "OldPassword123",
+                        "new_password": "NewStrongPassword123"
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Password changed successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password changed successfully."
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Bad request / validation error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized / wrong current password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Current password is incorrect."
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],
+    )
+    def post(self, payload):
+        client_ip = request.remote_addr
+        log_tag = "[admin_business_resource.py][ChangePasswordResource][post]"
+
+        try:
+            body = request.get_json(silent=True) or {}
+
+            auth_user = g.get("current_user", {}) or {}
+            auth_user__id = str(auth_user.get("_id") or "")
+            auth_business_id = str(auth_user.get("business_id") or "")
+            account_type = auth_user.get("account_type")
+            
+            email = decrypt_data(auth_user.get("email"))
+            fullname = decrypt_data(auth_user.get("fullname"))
+
+            if not auth_user__id or not auth_business_id:
+                Log.info(f"{log_tag} [{client_ip}] unauthorized: missing auth ids")
+                return prepared_response(False, "UNAUTHORIZED", "Unauthorized.")
+
+            target_business_id = resolve_target_business_id_from_payload(body)
+
+            Log.info(
+                f"{log_tag} [{client_ip}] change password request "
+                f"user_id={auth_user__id} business_id={target_business_id} account_type={account_type}"
+            )
+
+            # 1) Load user in target business scope
+            user_doc = User.get_by_id(auth_user__id, target_business_id)
+            if not user_doc:
+                Log.info(f"{log_tag} [{client_ip}] user not found")
+                return prepared_response(False, "NOT_FOUND", "User not found.")
+
+            current_password = payload.get("current_password")
+            new_password = payload.get("new_password")
+
+            if not current_password or not new_password:
+                return prepared_response(False, "BAD_REQUEST", "current_password and new_password are required.")
+
+            if current_password == new_password:
+                return prepared_response(False, "BAD_REQUEST", "New password must be one you've never used before.")
+
+            # 2) Verify current password
+            if not User.verify_change_password(user_doc, current_password):
+                Log.info(f"{log_tag} [{client_ip}] wrong current password for user_id={auth_user__id}")
+                return prepared_response(False, "UNAUTHORIZED", "Current password is incorrect.")
+ 
+            # 3) Update password
+            updated = User.update_password(
+                user_id=auth_user__id,
+                business_id=target_business_id,
+                new_password=new_password,
+            )
+
+            if not updated:
+                Log.info(f"{log_tag} [{client_ip}] password update failed for user_id={auth_user__id}")
+                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to change password.")
+            
+            #send email about password change
+            try:
+                update_passsword = send_password_changed_email(
+                    email=email,
+                    fullname=fullname,
+                    changed_at=datetime.now(),
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent"),
+                )
+                Log.info(f"{log_tag} change password email update: {update_passsword}")
+            except Exception as e:
+                Log.error(f"{log_tag} error sending change password emails: {e}")
+
+            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={auth_user__id}")
+            return prepared_response(True, "OK", "Password changed successfully.")
+
+        except PyMongoError as e:
+            Log.info(f"{log_tag} [{client_ip}] PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected database error occurred.", errors=str(e))
+        except Exception as e:
+            Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
+   
+
+#-------------------------------------------------------
+# CHOOSE PASSWORD
+#------------------------------------------------------- 
+@blp_business_auth.route("/choose-password", methods=["POST"])
+class ChoosePasswordResource(MethodView):
+
+    @profile_retrieval_limiter("change_password")
+    @blp_business_auth.arguments(ChoosePasswordSchema, location="form")
+    @blp_business_auth.doc(
+        summary="Change password for the current authenticated user",
+        description="""
+            Change the password of the currently authenticated user.
+
+            **How it works**
+            - The user must provide `current_password` and `new_password`.
+            - The API verifies `current_password` against the stored bcrypt hash.
+            - If valid, the API hashes `new_password` and updates the user record.
+
+            **Notes**
+            - Requires a valid Bearer token.
+            - Password update is enforced within the resolved business scope.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ChoosePasswordSchema,
+                    "example": {
+                        "current_password": "OldPassword123",
+                        "new_password": "NewStrongPassword123"
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Password changed successfully",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password changed successfully."
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Bad request / validation error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized / wrong current password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Current password is incorrect."
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "User not found",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 404,
+                            "message": "User not found"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],
+    )
+    def post(self, payload):
+        client_ip = request.remote_addr
+        log_tag = "[admin_business_resource.py][ChoosePasswordResource][post]"
+
+        try:
+            reset_token = payload.get("token")
+            target_business_id = payload.get("business_id")
+            password = payload.get("password")
+
+            Log.info(
+                f"{log_tag} [{client_ip}] change password request "
+                f"business_id={target_business_id}"
+            )
+            
+            # Validate token
+            token_data = PasswordResetToken.validate_token(reset_token)
+            
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                return prepared_response(False, "BAD_REQUEST", "Password reset link is invalid or has expired. Please request a new one.")
+
+            # Get user details from token
+            email = token_data.get("email")
+            user_id = token_data.get("user_id")
+            business_id = token_data.get("business_id")
+            
+            
+            # Update user password
+            success = User.update_password(
+                user_id=user_id, 
+                business_id=business_id, 
+                new_password=password,
+                password_chosen=True
+            )
+            
+            if not success:
+                Log.error(f"{log_tag} Failed to update password for user: {user_id}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to update password. Please try again."
+                )
+                
+            try:
+                update_account_status_email = Admin.update_account_status_by_business_id(
+                    business_id,
+                    client_ip,
+                    'email_verified',
+                    True
+                )
+                update_account_status_password = Admin.update_account_status_by_business_id(
+                    business_id,
+                    client_ip,
+                    'password_chosen',
+                    True
+                )
+                Log.info(f"{log_tag} update_account_status_email: {update_account_status_email} update_account_status_password: {update_account_status_password}")
+            except Exception as e:
+                Log.info(f"{log_tag} \t Error updating account status: {str(e)}")
+                
+            # Mark token as used
+            PasswordResetToken.mark_token_used(reset_token)
+            
+            Log.info(f"{log_tag} Password reset successful for user: {user_id}")
+            
+            user = User.get_user_by_email(email)
+            fullname = decrypt_data(user.get("fullname"))
+            
+            try:
+                update_passsword = send_password_changed_email(
+                    email=email,
+                    fullname=fullname,
+                    changed_at=datetime.now(),
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get("User-Agent"),
+                )
+                Log.error(f"{log_tag} change password email update: {update_passsword}")
+            except Exception as e:
+                Log.error(f"{log_tag} error sending change password emails: {e}")
+                
+            Log.info(f"{log_tag} [{client_ip}] password changed successfully for user_id={user_id}")
+            return prepared_response(True, "OK", "Password reset successful. The admin can now log in with their new password")
+                
+            
+        except PyMongoError as e:
+            Log.info(f"{log_tag} [{client_ip}] PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected database error occurred.", errors=str(e))
+        except Exception as e:
+            Log.info(f"{log_tag} [{client_ip}] Unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
+      
+
+
+# -----------------------INITIATE EMAIL VERIFICAITON-----------------------------------------
+@blp_business_auth.route("/initiate-email-verification", methods=["POST"])
+class BusinessRegistrationInitiateEmailVerificationResource(MethodView):
+    # PATCH Agent (Verify agent OTP)
+    @profile_retrieval_limiter("change_password")
+    @token_required
+    @blp_business_auth.arguments(BusinessEmailVerificationSchema, location="form")
+    @blp_business_auth.response(200, BusinessEmailVerificationSchema)
+    @blp_business_auth.doc(
+        summary="Verify Business Email",
+        description="""
+            This endpoint allows you to verify the business email for an business during registration. 
+            The request requires an `Authorization` header with a Bearer token.
+            - **POST**: Verify the business email by providing `agent_id` and `return_url`.
+        """,
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": BusinessEmailVerificationSchema,  # Schema for verifying business email
+                    "example": {
+                        "business_id": "67ff9e32272817d5812ab2fc",  # Example agent ID (ObjectId)
+                        "return_url": "http://localhost:7007/redirect"  # Example return URL
+                    }
+                }
+            },
+        },
+        responses={
+            200: {
+                "description": "Email has been successfully sent to the agent's business email",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "message": "Email has been sent to agent business email successfully.",
+                            "status_code": 200,
+                            "success": True
+                        }
+                    }
+                }
+            },
+            400: {
+                "description": "Invalid request data",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid input data"
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized request",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid authentication token"
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred",
+                            "error": "Detailed error message here"
+                        }
+                    }
+                }
+            }
+        },
+        security=[{"Bearer": []}],  # Bearer token authentication is required
+    )
+    def post(self, item_data):
+        """Handle the POST request to verify OTP."""
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {})
+        business_id = str(user_info.get("business_id"))
+        
+        log_tag = f'[admin_business_resource.py][BusinessRegistrationInitiateEmailVerificationResource][post][{client_ip}][{business_id}]'
+        
+        # Assign user_id and business_id from current user
+        item_data["business_id"] = business_id
+        return_url = item_data.get("return_url")
+        
+        # check if business exist before proceeding to update the information 
+        try:
+            Log.info(f"{log_tag} checking if business exist")
+            business = Business.get_business_by_id(business_id)
+            if not business:
+                Log.info(f"{log_tag} business_id with ID: {business_id} does not exist")
+                
+                return prepared_response(False, "NOT_FOUND", f"Business with ID: {business_id} does not exist")
+            
+            
+            # check if email is already verified and disallow re-verification
+            account_status = decrypt_data(business.get("account_status"))
+            
+            # Get the status for 'business_email_verified'
+            business_email_verified_status = next((item["business_email_verified"]["status"] for item in account_status if "business_email_verified" in item), None)
+            
+            #Check if business email has already been verified
+            if business_email_verified_status:
+                # stop the action of re-verification if status is already True
+                Log.info(f"{log_tag} Business email has already been verified.")
+                return prepared_response(False, "BAD_REQUEST", f" Business email has already been verified")
+            
+
+            fullname = business.get("fullname")
+            email = business.get("email")
+            return_url = decrypt_data(business.get("return_url"))
+            
+            try:
+                token = secrets.token_urlsafe(32) # Generates a 32-byte URL-safe token 
+                reset_url = generate_confirm_email_token_init_registration(return_url, token)
+
+                update_code = User.update_auth_code(email, token)
+                
+                if update_code:
+                    Log.info(f"{log_tag}\t reset_url: {reset_url}")
+                    send_user_registration_email(email, fullname, reset_url)
+                    
+                    Log.info(f"{log_tag} Email resent")
+                    return prepared_response(False, "OK", f" Email resent")
+            except Exception as e:
+                Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
+            
+        except Exception as e:
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred: {e}")
+     
+#-------------------------------------------------------
+# ME
+#-------------------------------------------------------     
+@blp_business_auth.route("/me", methods=["GET"])
+class CurrentUserResource(MethodView):
+
+    @token_required
+    @blp_business_auth.response(200)
+    @blp_business_auth.doc(
+        summary="Get current authenticated user",
+        description="Returns the profile of the currently authenticated user based on their JWT token.",
+        security=[{"Bearer": []}],
+    )
+    def get(self):
+        client_ip = request.remote_addr
+        log_tag = '[admin_business_resource.py][CurrentUserResource][get]'
+
+        body = request.get_json(silent=True) or {}
+        admin = None
+
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = resolve_target_business_id_from_payload(body)
+
+        auth_user__id = str(user_info.get("_id") or "")
+        account_type = user_info.get("account_type")
+
+        Log.info(f"{log_tag} [{client_ip}] fetching profile for user_id={auth_user__id}")
+
+        # ----------------- FETCH USER ----------------- #
+        user = User.get_by_id(auth_user__id, target_business_id)
+
+        # ✅ BUG 1 FIX: null check BEFORE any access on user
+        if user is None:
+            Log.info(f"{log_tag} [{client_ip}] user not found")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+                "message": "User not found"
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        email = decrypt_data(user.get("email"))  # ✅ safe to decrypt now
+
+        # ----------------- FETCH BUSINESS ----------------- #
+        business = Business.get_business_by_id(target_business_id)
+
+        if not business:
+            Log.info(f"{log_tag} [{client_ip}] business not found for email={email}")
+            return jsonify({
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
+                "message": "Business not found"
+            }), HTTP_STATUS_CODES["NOT_FOUND"]
+
+        decrypted_full_name = decrypt_data(user.get("fullname"))
+        business_info = {key: safe_decrypt(business.get(key)) for key in BUSINESS_FIELDS}
+        
+        try:
+            admin = Admin.get_by_email_and_business_id(email=email, business_id=target_business_id)
+        except Exception as e:
+            Log.error(f"{log_tag} Error retrieving admin: {str(e)}")
+            
+
+        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
+            response = {
+                "fullname": decrypted_full_name,
+                "admin_id": str(user.get("_id")),
+                "business_id": target_business_id,
+                "tenant_id": decrypt_data(business.get("tenant_id")),
+                "email": business.get("email"),
+                "account_status": decrypt_data(business.get("account_status")),
+                "profile": business_info,
+                "account_type": account_type,
+            }
+        else:
+            response = {
+                "fullname": decrypted_full_name,
+                "admin_id": str(user.get("_id")),
+                "business_id": target_business_id,
+                "tenant_id": decrypt_data(business.get("tenant_id")),
+                "email": email,
+                "account_status": decrypt_data(business.get("account_status")),
+                "admin_account_status": admin.get("account_status") if admin else None,
+                "profile": business_info,
+                "account_type": account_type,
+            }
+            
+
+        # ----------------- FETCH PERMISSIONS ----------------- #
+        permissions = {}  # ✅ BUG 2 FIX: default before try block
+
+        try:
+            role_id = user.get("role") or None
+
+            if role_id is not None:
+                role = Role.get_by_id(
+                    role_id=role_id,
+                    business_id=target_business_id,
+                    is_logging_in=True
+                )
+
+                if role is not None:
+                    permissions = role.get("permissions") or {}
+
+        except Exception as e:
+            Log.info(f"{log_tag} [{client_ip}] error retrieving permissions: {e}")
+
+        # ----------------- BUILD RESPONSE ----------------- #
+        if account_type in (
+            SYSTEM_USERS["SYSTEM_OWNER"],
+            SYSTEM_USERS["SUPER_ADMIN"],
+            SYSTEM_USERS["BUSINESS_OWNER"]
+        ):
+            response["permissions"] = {}
+        else:
+            response["permissions"] = permissions
+
+        return jsonify(response), HTTP_STATUS_CODES["OK"]
+
+
+
+
+      
+#-------------------------------------------------------
+# LOGOUT
+#-------------------------------------------------------  
+@blp_business_auth.route("/logout", methods=["POST"])
+class LogoutResource(MethodView):
+    @logout_rate_limiter("logout")
+    @token_required
+    @blp_business_auth.doc(
+        summary="Logout from account",
+        description="This endpoint allows a user to logout by invalidating their access token. A valid access token must be provided in the Authorization header.",
+        security=[{"BearerAuth": []}],
+        responses={
+            200: {
+                "description": "Logout successful",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Successfully logged out."
+                        }
+                    }
+                }
+            },
+            401: {
+                "description": "Unauthorized - Invalid or missing token",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Invalid or expired token."
+                        }
+                    }
+                }
+            },
+            500: {
+                "description": "Internal Server Error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "An unexpected error occurred."
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def post(self):
+        client_ip = request.remote_addr
+        auth_header = request.headers.get('Authorization')
+        log_tag = '[admin_business_resource.py][LogoutResource][post]'
+
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return prepared_response(False, "UNAUTHORIZED", f"Authorization token is missing or invalid.")
+        
+        access_token = auth_header.split(' ')[1]
+        
+        try:
+            # Delete or invalidate the token from database
+            token_deleted = Token.delete_token(access_token)
+
+            if token_deleted:
+                Log.info(f"{log_tag} [{client_ip}]: token invalidated successfully.")
+                return prepared_response(False, "OK", f"Successfully logged out.")
+                
+            else:
+                Log.info(f"{log_tag}[{client_ip}]: token invalidation failed.")
+                return prepared_response(False, "UNAUTHORIZED", f"Invalid or expired token.")
+                
+        except Exception as e:
+            Log.error(f"{log_tag}[{client_ip}]: logout error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", f"An unexpected error occurred. {str(e)}")
+
+         
+
+#-------------------------------------------------------
+# FORGOT PASSWORD INITIATE
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/forgot-password", methods=["POST"])
+class ForgotPasswordInitiateResource(MethodView):
+    @login_ip_limiter("forgot-password")
+    @login_user_limiter("forgot-password")
+    @blp_business_auth.arguments(ForgotPasswordInitiateSchema, location="form")
+    @blp_business_auth.response(200)
+    @blp_business_auth.doc(
+        summary="Forgot Password: Initiate Reset",
+        description=(
+            "Initiates password reset process.\n\n"
+            "Validates email and sends a password reset link to the user's email.\n"
+            "Reset link expires in 5 minutes.\n\n"
+            "Next step: User clicks link in email and provides new password."
+        ),
+        parameters=[
+            {
+                "in": "header",
+                "name": "x-app-key",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application key required to access this endpoint.",
+            },
+            {
+                "in": "header",
+                "name": "x-app-secret",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Application secret required to access this endpoint.",
+            }
+        ],
+        requestBody={
+            "required": True,
+            "content": {
+                "application/x-www-form-urlencoded": {
+                    "schema": ForgotPasswordInitiateSchema,
+                    "example": {
+                        "email": "johndoe@example.com",
+                        "return_url": "https://app.example.com/reset-password"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Reset link sent to email",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password reset link sent to email",
+                            "message_to_show": "We sent a password reset link to your email address. Please check your email and click on the link to proceed."
+                        }
+                    }
+                },
+            },
+            401: {
+                "description": "Unauthorized (invalid app key OR email not found)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 401,
+                            "message": "Email address does not exist"
+                        }
+                    }
+                },
+            },
+            429: {
+                "description": "Rate limited (too many attempts)",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 429,
+                            "message": "Too many requests. Please try again later."
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Failed to send password reset email"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    def post(self, item_data):
+        """Initiate forgot password process."""
+        
+        client_ip = request.remote_addr
+        email = item_data.get("email")
+        
+        log_tag = f'[admin_business_resource.py][ForgotPasswordInitiateResource][post][{client_ip}][{email}]'
+        Log.info(f"{log_tag} Initiating forgot password request")
+        
+        # Check x-app-key header
+        app_key = request.headers.get('x-app-key')
+        server_app_key = os.getenv("X_APP_KEY")
+        
+        if app_key != server_app_key:
+            Log.warning(f"{log_tag} Invalid x-app-key header")
+            return prepared_response(
+                False,
+                "UNAUTHORIZED",
+                "Unauthorized request"
+            )
+        
+        try:
+            # Check if user exists
+            user = User.get_user_by_email(email)
+            
+            if user is None:
+                Log.warning(f"{log_tag} Email address does not exist")
+                # Security: Return success even if email doesn't exist
+                # to prevent email enumeration attacks
+                return jsonify(
+                    success=True,
+                    status_code=200,
+                    message="If an account exists with this email, a reset link has been sent.",
+                    message_to_show="If an account exists with this email, you will receive a password reset link shortly."
+                ), 200
+            
+            # Get return URL (frontend reset password page)
+            return_url = item_data.get("return_url") or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
+            
+            # Create password reset token (5 minutes expiry)
+            success, reset_token, error = PasswordResetToken.create_token(
+                email=email,
+                user_id=user.get("_id"),
+                business_id=str(user.get("business_id")),
+                expiry_minutes=5
+            )
+            
+            if not success:
+                Log.error(f"{log_tag} Failed to create reset token: {error}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to initiate password reset"
+                )
+            
+            # Generate full reset URL with token
+            reset_url = generate_forgot_password_token(return_url, reset_token)
+            
+            # Get user details
+            fullname = decrypt_data(user.get("fullname")) if user.get("fullname") else None
+            
+            Log.info(f"{log_tag} Sending password reset email")
+            
+            # Send email
+            email_result = send_forgot_password_email(
+                email=email,
+                reset_url=reset_url,
+                fullname=fullname if fullname else email,
+                ip_address=client_ip,
+                user_agent=request.headers.get("User-Agent", "Unknown")
+            )
+            
+            Log.info(f"{log_tag} Email sending result: {email_result}")
+            
+            if email_result.get("ok"):
+                Log.info(f"{log_tag} Password reset email sent successfully")
+                return jsonify(
+                    success=True,
+                    status_code=200,
+                    message="Password reset link sent to email",
+                    message_to_show="We sent a password reset link to your email address. Please check your email and click on the link to proceed. The link will expire in 5 minutes."
+                ), 200
+            else:
+                Log.error(f"{log_tag} Email sending failed: {email_result.get('error')}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to send password reset email"
+                )
+                
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(
+                False,
+                "INTERNAL_SERVER_ERROR",
+                "An error occurred processing your request"
+            )
+
+#-------------------------------------------------------
+# RESET PASSWORD (Callback from Email Link)
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/reset-password/callback", methods=["GET"])
+class ResetPasswordCallback(MethodView):
+    """Handle password reset callback from email link."""
+    
+    @blp_business_auth.doc(
+        summary="Password Reset Callback",
+        description=(
+            "Validates the reset token from email link and redirects to frontend.\n\n"
+            "This endpoint is called when user clicks the reset link in their email.\n"
+            "It validates the token and redirects to the frontend reset password form."
+        ),
+        parameters=[
+            {
+                "in": "query",
+                "name": "token",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Password reset token from email",
+            },
+            {
+                "in": "query",
+                "name": "return_url",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Frontend URL to redirect after validation",
+            }
+        ],
+        responses={
+            302: {
+                "description": "Redirect to frontend with status",
+            },
+        },
+    )
+    def get(self):
+        """Validate token and redirect to frontend."""
+        
+        from flask import redirect
+        from ....utils.url_utils import generate_return_url_with_payload
+        
+        client_ip = request.remote_addr
+        reset_token = request.args.get('token')
+        return_url = request.args.get('return_url') or os.getenv("FRONT_END_BASE_URL") + '/reset-password'
+        
+        log_tag = f"[admin_business_resource.py][ResetPasswordCallback][get][{client_ip}]"
+        
+        try:
+            Log.info(f"{log_tag} Password reset callback received")
+            
+            # Validate required parameters
+            if not reset_token:
+                Log.warning(f"{log_tag} No token provided")
+                query_params = {
+                    "status": "Failed",
+                    "message": "Invalid reset link - no token provided"
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
+            
+            # Validate token
+            token_data = PasswordResetToken.validate_token(reset_token)
+            
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                query_params = {
+                    "status": "Failed",
+                    "message": "Password reset link is invalid or has expired. Please request a new one."
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
+            
+            # Get user to verify they still exist
+            email = token_data.get("email")
+            user = User.get_user_by_email(email)
+            
+            if not user:
+                Log.warning(f"{log_tag} User not found for email: {email}")
+                query_params = {
+                    "status": "Failed",
+                    "message": "User account not found"
+                }
+                return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+                return redirect(return_url_with_params)
+            
+            # Token is valid - redirect to frontend with token
+            Log.info(f"{log_tag} Token validated successfully for email: {email}")
+            
+            query_params = {
+                "status": "Success",
+                "token": reset_token,
+                "email": email
+            }
+            return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+            
+            return redirect(return_url_with_params)
+            
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            
+            query_params = {
+                "status": "Failed",
+                "message": "An error occurred processing your request"
+            }
+            return_url_with_params = generate_return_url_with_payload(return_url, query_params)
+            return redirect(return_url_with_params)
+
+
+#-------------------------------------------------------
+# RESET PASSWORD (Execute)
+#-------------------------------------------------------
+@blp_business_auth.route("/auth/reset-password", methods=["POST"])
+class ResetPasswordExecute(MethodView):
+    """Execute password reset with new password."""
+    
+    @login_ip_limiter("reset-password")
+    @blp_business_auth.arguments(ResetPasswordSchema, location="form")
+    @blp_business_auth.response(200)
+    @blp_business_auth.doc(
+        summary="Reset Password: Execute",
+        description=(
+            "Executes password reset with new password.\n\n"
+            "User provides the reset token (from email) and their new password.\n"
+            "Token is validated and password is updated if valid."
+        ),
+        requestBody={
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ResetPasswordSchema,
+                    "example": {
+                        "token": "xxxxxxxxxxxxxxxxxxxxx",
+                        "password": "NewSecurePass123"
+                    }
+                }
+            }
+        },
+        responses={
+            200: {
+                "description": "Password reset successful",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "status_code": 200,
+                            "message": "Password reset successful"
+                        }
+                    }
+                },
+            },
+            400: {
+                "description": "Invalid token or weak password",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 400,
+                            "message": "Invalid or expired reset token"
+                        }
+                    }
+                },
+            },
+            500: {
+                "description": "Internal server error",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": False,
+                            "status_code": 500,
+                            "message": "Failed to update password"
+                        }
+                    }
+                },
+            },
+        },
+    )
+    def post(self, json_data):
+        """Reset user password with new password."""
+        
+        client_ip = request.remote_addr
+        log_tag = f"[admin_business_resource.py][ResetPasswordExecute][post][{client_ip}]"
+        
+        try:
+            token = json_data.get("token")
+            new_password = json_data.get("password")
+            
+            Log.info(f"{log_tag} Password reset attempt")
+            
+            # Validate password strength
+            if len(new_password) < 8:
+                Log.warning(f"{log_tag} Password too short")
+                return prepared_response(
+                    False,
+                    "BAD_REQUEST",
+                    "Password must be at least 8 characters"
+                )
+            
+            # Validate token
+            token_data = PasswordResetToken.validate_token(token)
+            
+            if not token_data:
+                Log.warning(f"{log_tag} Invalid or expired token")
+                return prepared_response(
+                    False,
+                    "BAD_REQUEST",
+                    "Invalid or expired reset token. Please request a new password reset link."
+                )
+            
+            # Get user details from token
+            email = token_data.get("email")
+            user_id = token_data.get("user_id")
+            business_id = token_data.get("business_id")
+            
+            # Update user password
+            success = User.update_password(user_id=user_id, business_id=business_id, new_password=new_password)
+            
+            if success:
+                # Mark token as used
+                PasswordResetToken.mark_token_used(token)
+                
+                Log.info(f"{log_tag} Password reset successful for user: {user_id}")
+                
+                
+                try:
+                    #send email about password change
+                    business = Business.get_business_by_id(business_id)
+                    fullname = business.get("business_name") if business.get("business_name") else None
+                    
+                    update_passsword = send_password_changed_email(
+                        email=email,
+                        fullname=fullname if business else email,
+                        changed_at=datetime.now(),
+                        ip_address=request.remote_addr,
+                        user_agent=request.headers.get("User-Agent"),
+                    )
+                    Log.error(f"{log_tag} change password email update: {update_passsword}")
+                except Exception as e:
+                    Log.error(f"{log_tag} error sending change password emails: {e}")
+                
+                return prepared_response(
+                    True,
+                    "OK",
+                    "Password reset successful. You can now log in with your new password."
+                )
+            else:
+                Log.error(f"{log_tag} Failed to update password for user: {user_id}")
+                return prepared_response(
+                    False,
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to update password. Please try again."
+                )
+                
+        except Exception as e:
+            Log.error(f"{log_tag} Error: {str(e)}", exc_info=True)
+            return prepared_response(
+                False,
+                "INTERNAL_SERVER_ERROR",
+                "An error occurred while resetting your password"
+            )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
