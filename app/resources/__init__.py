@@ -106,6 +106,10 @@ from .social.media_management_resource import blp_media_management
 from .doseal.admin.admin_legal_page_resource import blp_legal_admin
 from .social.legal_page_public_resource import blp_legal_public
 
+#church resources
+from .church.member_resource import blp_member
+from .church.branch_resource import blp_branch
+
 __all__ = [
     #-------------------
     #SUBSCRIBER ROUTES
@@ -161,6 +165,11 @@ __all__ = [
     "blp_media_management",
     "blp_legal_admin",
     "blp_legal_public",
+    #-------------------
+    #MEMBER ROUTES
+    #-------------------
+    "blp_member",
+    "blp_branch",
     #-------------------
     #ADMIN ROUTES
     #-------------------

@@ -53,6 +53,9 @@ from ..resources import (
     payment_webhook_blp,
     payment_blp,
     blp_product_import,
+    #member routes
+    blp_member,
+    blp_branch,
 )
 
 
@@ -262,6 +265,9 @@ def register_admin_routes(app, api):
         payment_webhook_blp,
         payment_blp,
         blp_product_import,
+        #member routes
+        blp_member,
+        blp_branch,
         
     ]
 

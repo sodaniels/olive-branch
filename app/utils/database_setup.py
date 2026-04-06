@@ -16,6 +16,7 @@ from ..models.notifications.notification_settings import NotificationSettings
 from ..models.social.ad_account import AdAccount, AdCampaign
 from ..models.social.social_auth import SocialAuth
 from ..models.social.password_reset_token import PasswordResetToken
+from ..models.church.member_model import Member
 
 #helpers
 from ..utils.logger import Log
@@ -64,6 +65,9 @@ def setup_database_indexes():
         AdAccount.ensure_indexes()
         SocialAuth.ensure_indexes()
         PasswordResetToken.create_indexes()
+        
+        #church members
+        Member.create_indexes()
         
         # Mark as completed
         mark_indexes_created()
