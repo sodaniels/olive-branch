@@ -105,7 +105,7 @@ REDIS_HOST = os.getenv("REDIS_HOST")
 connection = Redis(host=REDIS_HOST, port=6379)
 queue = Queue("emails", connection=connection)
 
-blp_business_auth = Blueprint("Business Auth", __name__, url_prefix="/v1/auth", description="Authentication Management")
+blp_business_auth = Blueprint("Church Auth", __name__, url_prefix="/v1/auth", description="Authentication Management")
 blp_admin_preauth = Blueprint("Admin Pre Auth", __name__, url_prefix="/v1/auth", description="Admin Pre Auth Management")
 
 
@@ -334,6 +334,18 @@ class RegisterBusinessResource(MethodView):
         app_key = request.headers.get('x-app-key')
         server_app_key = os.getenv("X_APP_KEY")
         
+        agree_to_terms = business_data.get('agree_to_terms', None)
+        
+        if agree_to_terms is None or str(agree_to_terms).lower() != "true" and str(agree_to_terms).lower() != "1":
+            Log.info(f"{log_tag} agreement to terms not accepted")
+            response = {
+                "success": False,
+                "status_code": HTTP_STATUS_CODES["BAD_REQUEST"],
+                "message": "You must agree to the terms and conditions to register."
+            }
+            return jsonify(response), HTTP_STATUS_CODES["BAD_REQUEST"]
+        
+        
         if app_key != server_app_key:
             Log.info(f"{log_tag} invalid x-app-key headers")
             response = {
@@ -368,6 +380,7 @@ class RegisterBusinessResource(MethodView):
         
         business_data["password"] = business_data.get('password')
         
+        
         account_status = [
                 {
                     "account_created": {
@@ -396,7 +409,7 @@ class RegisterBusinessResource(MethodView):
         # Try saving the business to MongoDB and handle any errors
         try:
             # send email after successful signup
-            Log.info(f"{log_tag} [{business_data['business_name']}][committing assignment history")
+            Log.info(f"{log_tag} [{business_data['church_name']}][committing assignment history")
             # committing business data to db
             
             # Record the start time
@@ -507,7 +520,7 @@ class RegisterBusinessResource(MethodView):
                                 requester_email=user_data["email"],
                                 requester_fullname=user_data["fullname"],
                                 requester_phone_number=user_data["phone_number"],
-                                company_name=business_data["business_name"],
+                                company_name=business_data["church_name"],
                                 cc_admins=["samuel@doseal.org"],
                             )
                         except Exception as e:
@@ -516,7 +529,7 @@ class RegisterBusinessResource(MethodView):
                         return jsonify({
                             "success": True,
                             "status_code": HTTP_STATUS_CODES["OK"],
-                            "message": "Business created successfully.", 
+                            "message": "Church account created successfully.", 
                         }), HTTP_STATUS_CODES["OK"]
                         
                     
@@ -622,7 +635,7 @@ class UpdateBusinessResource(MethodView):
         
         
         # Only these three fields are patchable
-        ALLOWED_FIELDS = {"business_name", "first_name", "last_name", "phone_number", "image"}
+        ALLOWED_FIELDS = {"church_name", "first_name", "last_name", "phone_number", "image"}
 
         updates = {k: v for k, v in item_data.items() if k in ALLOWED_FIELDS and v is not None}
 
@@ -640,11 +653,11 @@ class UpdateBusinessResource(MethodView):
             result = Business.update_business(business_id, **updates)
 
             duration = time.time() - start_time
-            Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
+            Log.info(f"{log_tag} Church updated in {duration:.2f}s fields={list(updates.keys())}")
 
             if not result:
-                Log.info(f"{log_tag} Business updated in {duration:.2f}s fields={list(updates.keys())}")
-                return prepared_response(False,"changes", "Business not found or no changes made.")
+                Log.info(f"{log_tag} Church updated in {duration:.2f}s fields={list(updates.keys())}")
+                return prepared_response(False,"changes", "Church not foundor no changes made.")
             
             try:
                 #logout user
@@ -658,7 +671,7 @@ class UpdateBusinessResource(MethodView):
             return jsonify({
                 "success": True,
                 "status_code": HTTP_STATUS_CODES["OK"],
-                "message": "Business updated successfully",
+                "message": "Church updated successfully",
                 "data": updates,
             }), HTTP_STATUS_CODES["OK"]
 
@@ -1623,7 +1636,7 @@ class CurrentUserResource(MethodView):
         business = Business.get_business_by_id(target_business_id)
 
         if not business:
-            Log.info(f"{log_tag} [{client_ip}] business not found for email={email}")
+            Log.info(f"{log_tag} [{client_ip}] Church not foundfor email={email}")
             return jsonify({
                 "success": False,
                 "status_code": HTTP_STATUS_CODES["NOT_FOUND"],
@@ -2199,7 +2212,7 @@ class ResetPasswordExecute(MethodView):
                 try:
                     #send email about password change
                     business = Business.get_business_by_id(business_id)
-                    fullname = business.get("business_name") if business.get("business_name") else None
+                    fullname = business.get("church_name") if business.get("church_name") else None
                     
                     update_passsword = send_password_changed_email(
                         email=email,

@@ -42,8 +42,9 @@ class Business(BaseModel):
     # Fields in DB that are encrypted (so we can decrypt when returning to API callers)
     FIELDS_TO_DECRYPT = [
         "tenant_id",
-        "business_name",
+        "church_name",
         "start_date",
+        "agree_to_terms",
         "business_contact",
         "account_status",
         "country",
@@ -162,12 +163,13 @@ class Business(BaseModel):
     def __init__(
         self,
         tenant_id: str,
-        business_name: str,
+        church_name: str,
         first_name: str,
         last_name: str,
         email: str,
         password: str,
         account_status: None,
+        agree_to_terms: None,
         # Optional
         country: Optional[str] = None,
         start_date: Optional[str] = None,
@@ -199,12 +201,14 @@ class Business(BaseModel):
 
         # Required encrypted fields
         self.tenant_id = self._enc(tenant_id)
-        self.business_name = self._enc(business_name)
+        self.church_name = self._enc(church_name)
         self.country = self._enc(country)
         self.first_name = self._enc(first_name)
         self.last_name = self._enc(last_name)
         self.email = self._enc(email)
         self.account_status = self._enc(account_status)
+        
+        self.agree_to_terms = self._enc(agree_to_terms)
 
         # Required hashed lookups
         self.hashed_email = hash_data(email)
@@ -259,8 +263,9 @@ class Business(BaseModel):
         """
         doc = {
             "tenant_id": self.tenant_id,
-            "business_name": self.business_name,
+            "church_name": self.church_name,
             "start_date": getattr(self, "start_date", None),
+            "agree_to_terms": getattr(self, "agree_to_terms", None),
             "image": getattr(self, "image", None),
             "business_contact": getattr(self, "business_contact", None),
             "country": self.country,
@@ -342,7 +347,7 @@ class Business(BaseModel):
         business = collection.find_one({"_id": object_id})
         if business:
             business["_id"] = str(business["_id"])
-            business["business_name"] = decrypt_data(business["business_name"])
+            business["church_name"] = decrypt_data(business["church_name"])
             business["email"] = decrypt_data(business["email"])
             # Decrypt other fields as necessary
             business.pop("password", None)
@@ -362,7 +367,7 @@ class Business(BaseModel):
         business = businesses_collection.find_one({"client_id": client_id})
         if business:
             business["_id"] = str(business["_id"])
-            business["business_name"] = decrypt_data(business["business_name"])
+            business["church_name"] = decrypt_data(business["church_name"])
             business["email"] = decrypt_data(business["email"])
             # Decrypt other fields as necessary
             business.pop("password", None)
@@ -530,7 +535,7 @@ class Business(BaseModel):
 
         cls.verify_permission("update", cls.__name__.lower())
 
-        ENCRYPT_FIELDS = {"business_name", "first_name", "last_name", "phone_number", "image"}
+        ENCRYPT_FIELDS = {"church_name", "first_name", "last_name", "phone_number", "image"}
 
         encrypted_updates = {}
         for key, value in updates.items():

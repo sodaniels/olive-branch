@@ -38,8 +38,24 @@ class BusinessSchema(Schema):
             "invalid": "Invalid Device ID"
         }
     )
+    agree_to_terms = fields.Str(
+        required=True,
+        bool=True,
+        error_messages={
+            "required": "Agreement to terms is required",
+            "invalid": "Invalid value for agreement to terms"
+        }
+    )
 
-    business_name = fields.Str(required=True, validate=validate.Length(min=2, max=200))
+    church_name = fields.Str(required=True, validate=validate.Length(min=2, max=200))
+    church_size = fields.Str(
+        required=True,
+        error_messages={
+            "required": "Approximate size of church is required",
+            "invalid": "Invalid Approximate size"
+        },
+        validate=validate.OneOf(["1-50 People","51-100 People", "101-250", "251-500 People", "501-1000 People", "Over 1000 People"], error="Approximate size must be one of: 1-50 People, 51-100 People, 101-250, 251-500 People, 501-1000 People, Over 1000 People")
+    )
     start_date = fields.Str(required=False, validate=validate_date_format)
     image = fields.Raw(required=False, allow_none=True, validate=validate_image)
     business_contact = fields.Str(required=False, validate=validate.Length(min=10, max=15))
@@ -90,7 +106,7 @@ class OAuthCredentialsSchema(Schema):
     )
     
 class BusinessUpdateSchema(Schema):
-    business_name = fields.Str(load_default=None)
+    church_name = fields.Str(load_default=None)
     first_name    = fields.Str(load_default=None)
     last_name     = fields.Str(load_default=None)
     phone_number     = fields.Str(load_default=None)
