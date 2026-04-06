@@ -77,6 +77,7 @@ class MemberCreateSchema(Schema):
         validate=validate.Length(min=1, max=100),
         error_messages={"required": "Last name is required"},
     )
+    
 
     # ── Optional personal ──
     middle_name = fields.Str(required=False, allow_none=True, validate=validate.Length(max=100))
@@ -92,6 +93,9 @@ class MemberCreateSchema(Schema):
     state_province = fields.Str(required=False, allow_none=True, validate=validate.Length(max=100))
     postal_code = fields.Str(required=False, allow_none=True, validate=validate.Length(max=20))
     country = fields.Str(required=False, allow_none=True, validate=validate.Length(max=100))
+    
+    
+    branch_id = fields.Str(required=True, validate=validate_objectid)
 
     # ── Demographics ──
     date_of_birth = fields.Str(required=False, allow_none=True)  # ISO date string

@@ -108,6 +108,26 @@ class MemberResource(MethodView):
                 f"Potential duplicate(s) found. {len(duplicates)} existing record(s) match.",
                 data={"duplicates": duplicates},
             )
+            
+        #check if branch exists
+        target_branch_id = json_data.get("branch_id")
+        try:
+
+            branch = Branch.get_by_id(branch_id=target_branch_id, business_id=target_business_id)
+        except Exception as e:
+            Log.error(f"{log_tag} error checking branch existence: {e}")
+            return prepared_response(
+                False, "INTERNAL_SERVER_ERROR",
+                "An error occurred while validating the target branch.",
+                errors=[str(e)],
+            )
+
+        if not branch:
+            Log.info(f"{log_tag}[branch_id:{target_branch_id}] target branch not found for business {target_business_id}")
+            return prepared_response(
+                False, "NOT_FOUND",
+                f"Target branch '{target_branch_id}' does not exist for this church.",
+            )
 
         # ── Create ──
         try:
@@ -239,6 +259,28 @@ class MemberResource(MethodView):
 
         if not member_id:
             return prepared_response(False, "BAD_REQUEST", "member_id must be provided.")
+        
+        target_branch_id = item_data.get("branch_id")
+        
+        if target_branch_id:
+            try:
+
+                branch = Branch.get_by_id(branch_id=target_branch_id, business_id=target_business_id)
+            except Exception as e:
+                Log.error(f"{log_tag} error checking branch existence: {e}")
+                return prepared_response(
+                    False, "INTERNAL_SERVER_ERROR",
+                    "An error occurred while validating the target branch.",
+                    errors=[str(e)],
+                )
+            
+            if not branch:
+                Log.info(f"{log_tag}[branch_id:{target_branch_id}] target branch not found for business {target_business_id}")
+                return prepared_response(
+                    False, "NOT_FOUND",
+                    f"Target branch '{target_branch_id}' does not exist for this church.",
+                )
+
 
         # Check exists
         try:
