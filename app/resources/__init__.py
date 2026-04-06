@@ -109,6 +109,7 @@ from .social.legal_page_public_resource import blp_legal_public
 #church resources
 from .church.member_resource import blp_member
 from .church.branch_resource import blp_branch
+from .church.household_resource import blp_household
 
 __all__ = [
     #-------------------
@@ -170,6 +171,7 @@ __all__ = [
     #-------------------
     "blp_member",
     "blp_branch",
+    "blp_household",
     #-------------------
     #ADMIN ROUTES
     #-------------------

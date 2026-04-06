@@ -7,8 +7,11 @@ from flask_smorest import Blueprint
 from pymongo.errors import PyMongoError
 
 from ..doseal.admin.admin_business_resource import token_required
+#models
 from ...models.church.member_model import Member
 from ...models.church.branch_model import Branch
+from ...models.church.household_model import Household
+#schemas
 from ...schemas.church.member_schema import (
     MemberCreateSchema,
     MemberUpdateSchema,
@@ -128,6 +131,26 @@ class MemberResource(MethodView):
                 False, "NOT_FOUND",
                 f"Target branch '{target_branch_id}' does not exist for this church.",
             )
+            
+        # ── Check if household exists ──
+        target_household_id = json_data.get("household_id")
+        if target_household_id:
+            try:
+                household = Household.get_by_id(household_id=target_household_id, business_id=target_business_id)
+            except Exception as e:
+                Log.error(f"{log_tag} error checking household existence: {e}")
+                return prepared_response(
+                    False, "INTERNAL_SERVER_ERROR",
+                    "An error occurred while validating the household.",
+                    errors=[str(e)],
+                )
+
+            if not household:
+                Log.info(f"{log_tag}[household_id:{target_household_id}] household not found for business {target_business_id}")
+                return prepared_response(
+                    False, "NOT_FOUND",
+                    f"Household '{target_household_id}' does not exist for this church.",
+                )
 
         # ── Create ──
         try:
@@ -281,6 +304,26 @@ class MemberResource(MethodView):
                     f"Target branch '{target_branch_id}' does not exist for this church.",
                 )
 
+        # ── Check if household exists ──
+        target_household_id = item_data.get("household_id")
+        if target_household_id:
+            try:
+                household = Household.get_by_id(household_id=target_household_id, business_id=target_business_id)
+            except Exception as e:
+                Log.error(f"{log_tag} error checking household existence: {e}")
+                return prepared_response(
+                    False, "INTERNAL_SERVER_ERROR",
+                    "An error occurred while validating the household.",
+                    errors=[str(e)],
+                )
+
+            if not household:
+                Log.info(f"{log_tag}[household_id:{target_household_id}] household not found for business {target_business_id}")
+                return prepared_response(
+                    False, "NOT_FOUND",
+                    f"Household '{target_household_id}' does not exist for this church.",
+                )
+                
 
         # Check exists
         try:
