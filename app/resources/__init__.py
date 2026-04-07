@@ -116,6 +116,7 @@ from .church.followup_resource import blp_followup
 from .church.care_resource import blp_care
 from .church.messaging_resource import blp_messaging
 from .church.event_resource import blp_event
+from .church.accounting_resource import blp_accounting
 
 __all__ = [
     #-------------------
@@ -184,6 +185,7 @@ __all__ = [
     "blp_care",
     "blp_church_messaging",
     "blp_event",
+    "blp_accounting",
     #-------------------
     #ADMIN ROUTES
     #-------------------
