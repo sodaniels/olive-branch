@@ -112,6 +112,7 @@ from .church.branch_resource import blp_branch
 from .church.household_resource import blp_household
 from .church.group_resource import blp_group
 from .church.attendance_resource import blp_attendance
+from .church.followup_resource import blp_followup
 
 __all__ = [
     #-------------------
@@ -176,6 +177,7 @@ __all__ = [
     "blp_household",
     "blp_group",
     "blp_attendance",
+    "blp_followup",
     #-------------------
     #ADMIN ROUTES
     #-------------------

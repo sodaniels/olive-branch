@@ -59,6 +59,7 @@ from ..resources import (
     blp_household,
     blp_group,
     blp_attendance,
+    blp_followup,
 )
 
 
@@ -274,6 +275,7 @@ def register_admin_routes(app, api):
         blp_household,
         blp_group,
         blp_attendance,
+        blp_followup,
         
     ]
 
