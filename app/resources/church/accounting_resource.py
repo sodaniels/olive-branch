@@ -7,10 +7,13 @@ from flask_smorest import Blueprint
 from pymongo.errors import PyMongoError
 
 from ..doseal.admin.admin_business_resource import token_required
+
 from ...models.church.accounting_model import (
     Account, Fund, Category, Payee, Transaction,
     Budget, Reconciliation, PaymentVoucher, BankImportRule,
 )
+from ...models.church.branch_model import Branch
+
 from ...schemas.church.accounting_schema import (
     AccountCreateSchema, AccountUpdateSchema, AccountIdQuerySchema, AccountListQuerySchema,
     FundCreateSchema, FundUpdateSchema, FundIdQuerySchema, FundListQuerySchema,
@@ -514,17 +517,86 @@ class FundSummaryReportResource(MethodView):
 
 @blp_accounting.route("/accounting/budget", methods=["POST","GET","PATCH","DELETE"])
 class BudgetResource(MethodView):
+    
     @token_required
     @blp_accounting.arguments(BudgetCreateSchema, location="json")
     @blp_accounting.response(201)
-    @blp_accounting.doc(summary="Create a budget with line items", security=[{"Bearer":[]}])
+    @blp_accounting.doc(
+        summary="Create a budget with line items",
+        description="Validates fund, branch, and all category IDs in line items before creation.",
+        security=[{"Bearer": []}],
+    )
     def post(self, json_data):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        json_data["business_id"]=bid; json_data["user_id"]=ui.get("user_id"); json_data["user__id"]=str(ui.get("_id"))
-        b = Budget(**json_data); buid = b.save()
-        if not buid: return prepared_response(False,"BAD_REQUEST","Failed.")
-        return prepared_response(True,"CREATED","Budget created.",data=Budget.get_by_id(buid,bid))
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {}) or {}
+        account_type = user_info.get("account_type")
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        target_business_id = _resolve_business_id(user_info, json_data.get("business_id"))
 
+        log_tag = make_log_tag(
+            "accounting_resource.py", "BudgetResource", "post",
+            client_ip, auth_user__id, account_type,
+            auth_business_id, target_business_id,
+        )
+
+        # ── Validate fund ──
+        fund_id = json_data.get("fund_id")
+        if fund_id:
+            fund = Fund.get_by_id(fund_id, target_business_id)
+            if not fund:
+                Log.info(f"{log_tag} fund not found: {fund_id}")
+                return prepared_response(False, "NOT_FOUND", f"Fund '{fund_id}' not found.")
+
+        # ── Validate branch ──
+        branch_id = json_data.get("branch_id")
+        if branch_id:
+            branch = Branch.get_by_id(branch_id, target_business_id)
+            if not branch:
+                Log.info(f"{log_tag} branch not found: {branch_id}")
+                return prepared_response(False, "NOT_FOUND", f"Branch '{branch_id}' not found.")
+
+        # ── Validate category IDs in line items ──
+        line_items = json_data.get("line_items") or []
+        for idx, item in enumerate(line_items):
+            cat_id = item.get("category_id")
+            if cat_id:
+                category = Category.get_by_id(cat_id, target_business_id)
+                if not category:
+                    Log.info(f"{log_tag} line item {idx + 1}: category not found: {cat_id}")
+                    return prepared_response(
+                        False, "NOT_FOUND",
+                        f"Line item {idx + 1} ('{item.get('category_name', '')}'): category '{cat_id}' not found.",
+                    )
+
+        # ── Create budget ──
+        try:
+            json_data["business_id"] = target_business_id
+            json_data["user_id"] = user_info.get("user_id")
+            json_data["user__id"] = auth_user__id
+
+            Log.info(f"{log_tag} creating budget with {len(line_items)} line items")
+            start_time = time.time()
+
+            budget = Budget(**json_data)
+            budget_id = budget.save()
+
+            duration = time.time() - start_time
+            Log.info(f"{log_tag} budget.save() returned {budget_id} in {duration:.2f}s")
+
+            if not budget_id:
+                return prepared_response(False, "BAD_REQUEST", "Failed to create budget.")
+
+            created = Budget.get_by_id(budget_id, target_business_id)
+            return prepared_response(True, "CREATED", "Budget created.", data=created)
+
+        except PyMongoError as e:
+            Log.error(f"{log_tag} PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=[str(e)])
+        except Exception as e:
+            Log.error(f"{log_tag} unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=[str(e)])
+        
     @token_required
     @blp_accounting.arguments(BudgetIdQuerySchema, location="query")
     @blp_accounting.response(200)
