@@ -8,6 +8,7 @@ from flask_smorest import Blueprint
 from pymongo.errors import PyMongoError
 
 from ...extensions.db import db
+from ...utils.helpers import stringify_object_ids
 
 from ..doseal.admin.admin_business_resource import token_required
 
@@ -681,6 +682,7 @@ class ReconciliationResource(MethodView):
         r = Reconciliation.get_by_id(qd.get("reconciliation_id"), bid)
         if not r: return prepared_response(False,"NOT_FOUND","Not found.")
         diff = Reconciliation.calculate_difference(qd["reconciliation_id"], bid)
+        r = stringify_object_ids(r)
         r["calculation"] = diff
         return prepared_response(True,"OK","Reconciliation.",data=r)
 
@@ -697,6 +699,7 @@ class ReconciliationResource(MethodView):
         if d.get("notes"): update["notes"] = d["notes"]
         c.update_one({"_id": BO(rid), "business_id": BO(bid)}, {"$set": update})
         r = Reconciliation.get_by_id(rid, bid)
+        r = stringify_object_ids(r)
         r["calculation"] = Reconciliation.calculate_difference(rid, bid)
         return prepared_response(True,"OK","Updated.",data=r)
 
