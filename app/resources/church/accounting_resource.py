@@ -1,10 +1,13 @@
 # resources/church/accounting_resource.py
 
 import time
+from datetime import datetime
 from flask import g, request
 from flask.views import MethodView
 from flask_smorest import Blueprint
 from pymongo.errors import PyMongoError
+
+from ...extensions.db import db
 
 from ..doseal.admin.admin_business_resource import token_required
 
@@ -640,19 +643,35 @@ class BudgetListResource(MethodView):
 
 @blp_accounting.route("/accounting/reconciliation", methods=["POST","GET","PATCH"])
 class ReconciliationResource(MethodView):
+    
     @token_required
     @blp_accounting.arguments(ReconciliationCreateSchema, location="json")
     @blp_accounting.response(201)
-    @blp_accounting.doc(summary="Start a bank reconciliation", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Start a bank reconciliation", security=[{"Bearer": []}])
     def post(self, json_data):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        acc = Account.get_by_id(json_data.get("account_id"), bid)
-        if not acc: return prepared_response(False,"NOT_FOUND","Account not found.")
-        json_data["business_id"]=bid; json_data["user_id"]=ui.get("user_id"); json_data["user__id"]=str(ui.get("_id"))
-        r = Reconciliation(**json_data); rid = r.save()
-        if not rid: return prepared_response(False,"BAD_REQUEST","Failed.")
-        return prepared_response(True,"CREATED","Reconciliation started.",data=Reconciliation.get_by_id(rid,bid))
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = _resolve_business_id(user_info)
 
+        acc = Account.get_by_id(json_data.get("account_id"), target_business_id)
+        if not acc:
+            return prepared_response(False, "NOT_FOUND", "Account not found.")
+
+        try:
+            json_data["business_id"] = target_business_id
+            json_data["user_id"] = user_info.get("user_id")
+            json_data["user__id"] = str(user_info.get("_id"))
+
+            r = Reconciliation(**json_data)
+            rid = r.save()
+
+            if not rid:
+                return prepared_response(False, "BAD_REQUEST", "Failed to start reconciliation.")
+
+            created = Reconciliation.get_by_id(rid, target_business_id)
+            return prepared_response(True, "CREATED", "Reconciliation started.", data=created)
+        except Exception as e:
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An error occurred.", errors=[str(e)])
+    
     @token_required
     @blp_accounting.arguments(ReconciliationIdQuerySchema, location="query")
     @blp_accounting.response(200)
