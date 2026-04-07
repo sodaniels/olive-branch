@@ -314,5 +314,5 @@ def register_admin_routes(app, api):
     # Root route
     @app.route('/')
     def index():
-        return {"message": "Schedulefy — API is healthy and ready to receive requests."}
+        return {"message": "Olive Branch — API is healthy and ready to receive requests."}
 
