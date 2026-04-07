@@ -53,13 +53,14 @@ from ..resources import (
     payment_webhook_blp,
     payment_blp,
     blp_product_import,
-    #member routes
+    #church routes
     blp_member,
     blp_branch,
     blp_household,
     blp_group,
     blp_attendance,
     blp_followup,
+    blp_care,
 )
 
 
@@ -269,13 +270,14 @@ def register_admin_routes(app, api):
         payment_webhook_blp,
         payment_blp,
         blp_product_import,
-        #member routes
+        #church routes
         blp_member,
         blp_branch,
         blp_household,
         blp_group,
         blp_attendance,
         blp_followup,
+        blp_care,
         
     ]
 
