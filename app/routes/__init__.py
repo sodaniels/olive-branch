@@ -61,6 +61,7 @@ from ..resources import (
     blp_attendance,
     blp_followup,
     blp_care,
+    blp_messaging,
 )
 
 
@@ -278,6 +279,7 @@ def register_admin_routes(app, api):
         blp_attendance,
         blp_followup,
         blp_care,
+        blp_messaging,
         
     ]
 
