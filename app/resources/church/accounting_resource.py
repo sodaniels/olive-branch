@@ -7,6 +7,7 @@ from flask import g, request
 from flask.views import MethodView
 from flask_smorest import Blueprint
 from pymongo.errors import PyMongoError
+from ...utils.crypt import hash_data
 
 from ...extensions.db import db
 from ...utils.helpers import stringify_object_ids
@@ -1049,7 +1050,6 @@ class FinancialDashboardResource(MethodView):
             for m in monthly.values():
                 m["net"] = round(m["income"] - m["expense"], 2)
 
-            from bson import ObjectId
 
             return prepared_response(True,"OK","Financial dashboard.",data={
                 "period": {"start": start, "end": end},
