@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime
+from bson import ObjectId
 from flask import g, request
 from flask.views import MethodView
 from flask_smorest import Blueprint
@@ -720,19 +721,68 @@ class ReconciliationCompleteResource(MethodView):
 
 @blp_accounting.route("/accounting/voucher", methods=["POST","GET"])
 class VoucherResource(MethodView):
+    
     @token_required
     @blp_accounting.arguments(VoucherCreateSchema, location="json")
     @blp_accounting.response(201)
-    @blp_accounting.doc(summary="Create a payment voucher (auto-generates voucher number)", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Create a payment voucher (auto-generates voucher number)", security=[{"Bearer": []}])
     def post(self, json_data):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        payee = Payee.get_by_id(json_data.get("payee_id"), bid)
-        if not payee: return prepared_response(False,"NOT_FOUND","Payee not found.")
-        json_data["business_id"]=bid; json_data["user_id"]=ui.get("user_id"); json_data["user__id"]=str(ui.get("_id"))
-        json_data["voucher_number"] = PaymentVoucher.get_next_voucher_number(bid)
-        v = PaymentVoucher(**json_data); vid = v.save()
-        if not vid: return prepared_response(False,"BAD_REQUEST","Failed.")
-        return prepared_response(True,"CREATED","Voucher created.",data=PaymentVoucher.get_by_id(vid,bid))
+        client_ip = request.remote_addr
+        user_info = g.get("current_user", {}) or {}
+        account_type = user_info.get("account_type")
+        auth_user__id = str(user_info.get("_id"))
+        auth_business_id = str(user_info.get("business_id"))
+        target_business_id = _resolve_business_id(user_info, json_data.get("business_id"))
+        log_tag = make_log_tag("accounting_resource.py", "VoucherCreateResource", "post", client_ip, auth_user__id, account_type, auth_business_id, target_business_id)
+
+        payee_id = json_data.get("payee_id")
+        if not Payee.get_by_id(payee_id, target_business_id):
+            Log.info(f"{log_tag} payee not found: {payee_id}")
+            return prepared_response(False, "NOT_FOUND", f"Payee '{payee_id}' not found.")
+
+        fund_id = json_data.get("fund_id")
+        if fund_id:
+            if not Fund.get_by_id(fund_id, target_business_id):
+                Log.info(f"{log_tag} fund not found: {fund_id}")
+                return prepared_response(False, "NOT_FOUND", f"Fund '{fund_id}' not found.")
+
+        account_id = json_data.get("account_id")
+        if account_id:
+            if not Account.get_by_id(account_id, target_business_id):
+                Log.info(f"{log_tag} account not found: {account_id}")
+                return prepared_response(False, "NOT_FOUND", f"Account '{account_id}' not found.")
+
+        category_id = json_data.get("category_id")
+        if category_id:
+            if not Category.get_by_id(category_id, target_business_id):
+                Log.info(f"{log_tag} category not found: {category_id}")
+                return prepared_response(False, "NOT_FOUND", f"Category '{category_id}' not found.")
+
+        branch_id = json_data.get("branch_id")
+        if branch_id:
+            if not Branch.get_by_id(branch_id, target_business_id):
+                Log.info(f"{log_tag} branch not found: {branch_id}")
+                return prepared_response(False, "NOT_FOUND", f"Branch '{branch_id}' not found.")
+
+        try:
+            json_data["business_id"] = target_business_id
+            json_data["user_id"] = user_info.get("user_id")
+            json_data["user__id"] = auth_user__id
+            json_data["voucher_number"] = PaymentVoucher.get_next_voucher_number(target_business_id)
+            v = PaymentVoucher(**json_data)
+            vid = v.save()
+            if not vid:
+                return prepared_response(False, "BAD_REQUEST", "Failed to create voucher.")
+            created = PaymentVoucher.get_by_id(vid, target_business_id)
+            Log.info(f"{log_tag} voucher created: {vid}")
+            return prepared_response(True, "CREATED", "Voucher created.", data=created)
+        except PyMongoError as e:
+            Log.error(f"{log_tag} PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=[str(e)])
+        except Exception as e:
+            Log.error(f"{log_tag} unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=[str(e)])
+    
 
     @token_required
     @blp_accounting.arguments(VoucherIdQuerySchema, location="query")
@@ -759,25 +809,57 @@ class VoucherApproveResource(MethodView):
     @token_required
     @blp_accounting.arguments(VoucherApproveSchema, location="json")
     @blp_accounting.response(200)
-    @blp_accounting.doc(summary="Approve a payment voucher", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Approve a payment voucher", security=[{"Bearer": []}])
     def post(self, d):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        ok = PaymentVoucher.approve(d["voucher_id"], bid, str(ui.get("_id")))
-        if ok: return prepared_response(True,"OK","Voucher approved.")
-        return prepared_response(False,"BAD_REQUEST","Failed. Voucher may not be in Draft status.")
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = _resolve_business_id(user_info)
+
+        existing = PaymentVoucher.get_by_id(d["voucher_id"], target_business_id)
+        if not existing:
+            Log.info(f"Voucher not found: {d['voucher_id']} for business {target_business_id}")
+            return prepared_response(False, "NOT_FOUND", "Voucher not found.")
+
+        if existing.get("status") != "Draft":
+            Log.info(f"Voucher status conflict: {d['voucher_id']} is '{existing.get('status')}', not 'Draft'")
+            return prepared_response(False, "CONFLICT", f"Voucher is '{existing.get('status')}', not Draft.")
+
+        ok = PaymentVoucher.approve(d["voucher_id"], target_business_id, str(user_info.get("_id")))
+        if ok:
+            updated = PaymentVoucher.get_by_id(d["voucher_id"], target_business_id)
+            return prepared_response(True, "OK", "Voucher approved.", data=updated)
+        return prepared_response(False, "BAD_REQUEST", "Failed to approve voucher.")
+
 
 @blp_accounting.route("/accounting/voucher/mark-paid", methods=["POST"])
 class VoucherMarkPaidResource(MethodView):
     @token_required
     @blp_accounting.arguments(VoucherMarkPaidSchema, location="json")
     @blp_accounting.response(200)
-    @blp_accounting.doc(summary="Mark voucher as paid (optionally link to a transaction)", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Mark voucher as paid (optionally link to a transaction)", security=[{"Bearer": []}])
     def post(self, d):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        ok = PaymentVoucher.mark_paid(d["voucher_id"], bid, d.get("transaction_id"))
-        if ok: return prepared_response(True,"OK","Voucher marked as paid.")
-        return prepared_response(False,"BAD_REQUEST","Failed. Voucher may not be in Approved status.")
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = _resolve_business_id(user_info)
 
+        existing = PaymentVoucher.get_by_id(d["voucher_id"], target_business_id)
+        if not existing:
+            Log.info(f"Voucher not found: {d['voucher_id']} for business {target_business_id}")
+            return prepared_response(False, "NOT_FOUND", "Voucher not found.")
+
+        if existing.get("status") != "Approved":
+            Log.info(f"Voucher status conflict: {d['voucher_id']} is '{existing.get('status')}', not 'Approved'")
+            return prepared_response(False, "CONFLICT", f"Voucher is '{existing.get('status')}', not Approved.")
+
+        txn_id = d.get("transaction_id")
+        if txn_id:
+            txn = Transaction.get_by_id(txn_id, target_business_id)
+            if not txn:
+                return prepared_response(False, "NOT_FOUND", f"Transaction '{txn_id}' not found.")
+
+        ok = PaymentVoucher.mark_paid(d["voucher_id"], target_business_id, txn_id)
+        if ok:
+            updated = PaymentVoucher.get_by_id(d["voucher_id"], target_business_id)
+            return prepared_response(True, "OK", "Voucher marked as paid.", data=updated)
+        return prepared_response(False, "BAD_REQUEST", "Failed to mark as paid.")
 
 # ════════════════════════════ BANK IMPORT ════════════════════════════
 
@@ -786,22 +868,69 @@ class BankImportRuleResource(MethodView):
     @token_required
     @blp_accounting.arguments(BankImportRuleCreateSchema, location="json")
     @blp_accounting.response(201)
-    @blp_accounting.doc(summary="Create an auto-categorisation rule for bank imports", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Create an auto-categorisation rule for bank imports", security=[{"Bearer": []}])
     def post(self, json_data):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        json_data["business_id"]=bid; json_data["user_id"]=ui.get("user_id"); json_data["user__id"]=str(ui.get("_id"))
-        r = BankImportRule(**json_data); rid = r.save()
-        if not rid: return prepared_response(False,"BAD_REQUEST","Failed.")
-        return prepared_response(True,"CREATED","Rule created.",data=BankImportRule._normalise(db.get_collection(BankImportRule.collection_name).find_one({"_id":ObjectId(rid)})))
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = _resolve_business_id(user_info)
+
+        account_id = json_data.get("account_id")
+        if account_id:
+            if not Account.get_by_id(account_id, target_business_id):
+                return prepared_response(False, "NOT_FOUND", f"Account '{account_id}' not found.")
+
+        category_id = json_data.get("category_id")
+        if category_id:
+            if not Category.get_by_id(category_id, target_business_id):
+                return prepared_response(False, "NOT_FOUND", f"Category '{category_id}' not found.")
+
+        fund_id = json_data.get("fund_id")
+        if fund_id:
+            if not Fund.get_by_id(fund_id, target_business_id):
+                return prepared_response(False, "NOT_FOUND", f"Fund '{fund_id}' not found.")
+
+        payee_id = json_data.get("payee_id")
+        if payee_id:
+            if not Payee.get_by_id(payee_id, target_business_id):
+                return prepared_response(False, "NOT_FOUND", f"Payee '{payee_id}' not found.")
+
+        try:
+            json_data["business_id"] = target_business_id
+            json_data["user_id"] = user_info.get("user_id")
+            json_data["user__id"] = str(user_info.get("_id"))
+
+            r = BankImportRule(**json_data)
+            rid = r.save()
+
+            if not rid:
+                return prepared_response(False, "BAD_REQUEST", "Failed to create rule.")
+
+            created = BankImportRule._normalise(
+                db.get_collection(BankImportRule.collection_name).find_one({"_id": ObjectId(rid)})
+            )
+            return prepared_response(True, "CREATED", "Rule created.", data=created)
+        except Exception as e:
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An error occurred.", errors=[str(e)])
+
 
     @token_required
     @blp_accounting.arguments(BankImportRuleIdQuerySchema, location="query")
     @blp_accounting.response(200)
-    @blp_accounting.doc(summary="Delete a bank import rule", security=[{"Bearer":[]}])
+    @blp_accounting.doc(summary="Delete a bank import rule", security=[{"Bearer": []}])
     def delete(self, qd):
-        ui = g.get("current_user",{}); bid = _resolve_business_id(ui)
-        BankImportRule.delete(qd["rule_id"], bid)
-        return prepared_response(True,"OK","Rule deleted.")
+        user_info = g.get("current_user", {}) or {}
+        target_business_id = _resolve_business_id(user_info)
+
+        rule_doc = db.get_collection(BankImportRule.collection_name).find_one(
+            {"_id": ObjectId(qd["rule_id"]), "business_id": ObjectId(target_business_id)}
+        )
+        if not rule_doc:
+            return prepared_response(False, "NOT_FOUND", "Bank import rule not found.")
+
+        try:
+            BankImportRule.delete(qd["rule_id"], target_business_id)
+            return prepared_response(True, "OK", "Rule deleted.")
+        except Exception as e:
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An error occurred.", errors=[str(e)])
 
 @blp_accounting.route("/accounting/bank-import/rules", methods=["GET"])
 class BankImportRuleListResource(MethodView):
@@ -824,7 +953,9 @@ class BankImportResource(MethodView):
         account_id = json_data.get("account_id")
 
         acc = Account.get_by_id(account_id, bid)
-        if not acc: return prepared_response(False,"NOT_FOUND","Account not found.")
+        if not acc: 
+            Log.info(f"Bank import failed: account not found: {account_id} for business {bid}")
+            return prepared_response(False,"NOT_FOUND","Account not found.")
 
         created = 0; auto_categorised = 0; errors_list = []
 

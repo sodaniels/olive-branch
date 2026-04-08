@@ -275,7 +275,8 @@ class VoucherIdQuerySchema(Schema):
 
 class VoucherListQuerySchema(Schema):
     class Meta: unknown = EXCLUDE
-    page = fields.Int(load_default=1); per_page = fields.Int(load_default=50)
+    page = fields.Int(load_default=1); 
+    per_page = fields.Int(load_default=50)
     status = fields.Str(required=False, allow_none=True, validate=validate.OneOf(VOUCHER_STATUSES))
     payee_id = fields.Str(required=False, allow_none=True, validate=validate_objectid)
     start_date = fields.Str(required=False, allow_none=True)
