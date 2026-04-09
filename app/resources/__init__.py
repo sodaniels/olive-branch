@@ -121,6 +121,7 @@ from .church.donation_resource import blp_donation
 from .church.volunteer_resource import blp_volunteer
 from .church.worship_resource import blp_worship
 from .church.workflow_resource import blp_workflow
+from .church.dashboard_resource import blp_dashboard
 
 __all__ = [
     #-------------------
@@ -194,6 +195,7 @@ __all__ = [
     "blp_volunteer",
     "blp_worship",
     "blp_workflow",
+    "blp_dashboard",
     #-------------------
     #ADMIN ROUTES
     #-------------------
