@@ -107,6 +107,7 @@ class HouseholdResource(MethodView):
                 )
 
             if not branch:
+                Log.info(f"{log_tag} branch_id provided but not found: {branch_id}")
                 return prepared_response(False, "NOT_FOUND", f"Branch '{branch_id}' not found.")
 
         # ── Create ──

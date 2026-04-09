@@ -65,6 +65,7 @@ from ..resources import (
     blp_event,
     blp_accounting,
     blp_donation,
+    blp_volunteer,
 )
 
 
@@ -286,6 +287,7 @@ def register_admin_routes(app, api):
         blp_event,
         blp_accounting,
         blp_donation,
+        blp_volunteer,
         
     ]
 
