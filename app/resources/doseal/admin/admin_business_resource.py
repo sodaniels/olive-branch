@@ -838,7 +838,7 @@ class LoginBusinessInitiateResource(MethodView):
         try:
             test_email = os.getenv("EMAIL_FOR_TESTING")
             
-            app_name = os.getenv("APP_NAME", "Schedulefy")
+            app_name = os.getenv("APP_NAME", "Olive Branch CRM")
             
             redisKey = f'login_otp_token_{email}'
             

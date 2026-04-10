@@ -28,7 +28,7 @@ class EmailConfig:
     provider: str  # "mailgun" | "smtp"
 
     from_email: str
-    from_name: str = "Schedulefy"
+    from_name: str = "Olive Branch CRM"
     templates_dir: str = "templates"
 
     mailgun_api_key: Optional[str] = None
@@ -46,7 +46,7 @@ def load_email_config() -> EmailConfig:
     provider = os.getenv("EMAIL_PROVIDER", "mailgun").lower()
 
     from_email = os.getenv("SENDER_EMAIL") or ""
-    from_name = os.getenv("MAIL_NAME", "Schedulefy")
+    from_name = os.getenv("MAIL_NAME", "Olive Branch CRM")
     templates_dir = os.getenv("EMAIL_TEMPLATES_DIR", "templates")
 
     return EmailConfig(
@@ -780,7 +780,7 @@ def send_payment_confirmation_email(
     cfg = load_email_config()
     svc = EmailService(cfg)
 
-    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
     subject = f"Payment received — {plan_name} | {app_name}"
 
     text = (
@@ -849,7 +849,7 @@ def send_trial_started_email(
     cfg = load_email_config()
     svc = EmailService(cfg)
 
-    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
     subject = f"Your {trial_days}-day free trial has started | {app_name}"
 
     text = (
@@ -901,7 +901,7 @@ def send_trial_ended_email(
     cfg = load_email_config()
     svc = EmailService(cfg)
 
-    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
     subject = f"Your free trial has ended | {app_name}"
 
     text = (
@@ -951,7 +951,7 @@ def send_trial_cancelled_email(
     cfg = load_email_config()
     svc = EmailService(cfg)
 
-    app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+    app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
     subject = f"Your free trial was cancelled | {app_name}"
 
     cancelled_at_str = (
@@ -1019,7 +1019,7 @@ def send_trial_expiring_email(business_id: str, days_remaining: int) -> Dict[str
         cfg = load_email_config()
         svc = EmailService(cfg)
 
-        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
         support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
 
         upgrade_url = os.getenv(
@@ -1088,7 +1088,7 @@ def send_trial_expired_email(business_id: str) -> Dict[str, Any]:
         cfg = load_email_config()
         svc = EmailService(cfg)
 
-        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
         support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
 
         upgrade_url = os.getenv(
@@ -1160,7 +1160,7 @@ def send_forgot_password_email(
         cfg = load_email_config()
         svc = EmailService(cfg)
 
-        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
         support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
 
         # Token expiry time - 5 minutes
@@ -1239,7 +1239,7 @@ def send_admin_invitation_email(
         cfg = load_email_config()
         svc = EmailService(cfg)
 
-        app_name = os.getenv("APP_NAME", cfg.from_name or "Schedulefy")
+        app_name = os.getenv("APP_NAME", cfg.from_name or "Olive Branch CRM")
         support_email = os.getenv("SUPPORT_EMAIL", "support@schedulefy.org")
 
         expiry_hours = int(os.getenv("ADMIN_INVITE_EXPIRY_HOURS", "24"))

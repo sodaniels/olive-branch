@@ -124,6 +124,7 @@ from .church.workflow_resource import blp_workflow
 from .church.dashboard_resource import blp_dashboard
 from .church.report_resource import blp_report
 from .church.pledge_resource import blp_pledge
+from .church.form_resource import blp_form
 
 __all__ = [
     #-------------------
@@ -200,6 +201,7 @@ __all__ = [
     "blp_dashboard",
     "blp_report",
     "blp_pledge",
+    "blp_form",
     #-------------------
     #ADMIN ROUTES
     #-------------------
