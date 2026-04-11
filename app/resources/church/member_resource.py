@@ -29,6 +29,7 @@ from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag
 from ...utils.logger import Log
 from ...constants.service_code import SYSTEM_USERS
+from ...decorators.permission_decorator import require_permission
 
 blp_member = Blueprint("members", __name__, description="Church member / people management")
 
@@ -59,6 +60,7 @@ class MemberResource(MethodView):
 
     # ────────────── CREATE MEMBER (POST) ──────────────
     @token_required
+    @require_permission("members", "create")
     @blp_member.arguments(MemberCreateSchema, location="json")
     @blp_member.response(201, MemberCreateSchema)
     @blp_member.doc(

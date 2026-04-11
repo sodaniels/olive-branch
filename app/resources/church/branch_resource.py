@@ -21,6 +21,7 @@ from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag, _resolve_business_id
 from ...utils.logger import Log
 from ...constants.service_code import SYSTEM_USERS
+from ...decorators.permission_decorator import require_permission
 
 blp_branch = Blueprint("branches", __name__, description="Church branch / campus / parish management")
 
@@ -36,6 +37,7 @@ class BranchResource(MethodView):
 
     # ────────────── CREATE BRANCH (POST) ──────────────
     @token_required
+    @require_permission("branches", "create")
     @blp_branch.arguments(BranchCreateSchema, location="json")
     @blp_branch.response(201, BranchCreateSchema)
     @blp_branch.doc(
@@ -173,6 +175,7 @@ class BranchResource(MethodView):
 
     # ────────────── GET SINGLE BRANCH ──────────────
     @token_required
+    @require_permission("branches", "read")
     @blp_branch.arguments(BranchIdQuerySchema, location="query")
     @blp_branch.response(200, BranchCreateSchema)
     @blp_branch.doc(
@@ -232,6 +235,7 @@ class BranchResource(MethodView):
 
     # ────────────── UPDATE BRANCH (PATCH) ──────────────
     @token_required
+    @require_permission("branches", "read")
     @blp_branch.arguments(BranchUpdateSchema, location="json")
     @blp_branch.response(200, BranchUpdateSchema)
     @blp_branch.doc(
@@ -338,6 +342,7 @@ class BranchResource(MethodView):
 
     # ────────────── DELETE BRANCH ──────────────
     @token_required
+    @require_permission("branches", "delete")
     @blp_branch.arguments(BranchIdQuerySchema, location="query")
     @blp_branch.response(200)
     @blp_branch.doc(
@@ -432,6 +437,7 @@ class BranchResource(MethodView):
 class BranchListResource(MethodView):
 
     @token_required
+    @require_permission("branches", "read")
     @blp_branch.arguments(BranchListQuerySchema, location="query")
     @blp_branch.response(200)
     @blp_branch.doc(
@@ -526,6 +532,7 @@ class BranchListResource(MethodView):
 class BranchSearchResource(MethodView):
 
     @token_required
+    @require_permission("branches", "read")
     @blp_branch.arguments(BranchSearchQuerySchema, location="query")
     @blp_branch.response(200)
     @blp_branch.doc(
@@ -577,6 +584,7 @@ class BranchSearchResource(MethodView):
 class BranchSummaryResource(MethodView):
 
     @token_required
+    @require_permission("branches", "read")
     @blp_branch.response(200)
     @blp_branch.doc(
         summary="Get a summary of all branches (counts by type, status, region, district)",
@@ -608,6 +616,7 @@ class BranchSummaryResource(MethodView):
 class BranchArchiveResource(MethodView):
 
     @token_required
+    @require_permission("branches", "archive")
     @blp_branch.arguments(BranchArchiveSchema, location="json")
     @blp_branch.response(200)
     @blp_branch.doc(summary="Soft-delete (archive) a branch", security=[{"Bearer": []}])
@@ -647,6 +656,7 @@ class BranchArchiveResource(MethodView):
 class BranchRestoreResource(MethodView):
 
     @token_required
+    @require_permission("branches", "update")
     @blp_branch.arguments(BranchArchiveSchema, location="json")
     @blp_branch.response(200)
     @blp_branch.doc(summary="Restore an archived branch", security=[{"Bearer": []}])

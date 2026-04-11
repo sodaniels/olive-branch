@@ -93,7 +93,7 @@ MODULE_ACTIONS = {
     "businesses":    ["read", "create", "update", "delete", "manage", "export"],
     "dashboard":     ["read"],
     "members":       ["read", "create", "update", "delete", "import", "export", "manage"],
-    "branches":      ["read", "create", "update", "delete"],
+    "branches":      ["read", "create", "update", "delete", "archive", "export"],
     "households":    ["read", "create", "update", "delete"],
     "groups":        ["read", "create", "update", "delete", "manage", "assign"],
     "ministries":    ["read", "create", "update", "delete", "manage", "assign"],

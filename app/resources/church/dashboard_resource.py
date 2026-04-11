@@ -19,6 +19,7 @@ from ...schemas.church.dashboard_schema import (
 from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag, _resolve_business_id
 from ...utils.logger import Log
+from ...decorators.permission_decorator import require_permission
 
 blp_dashboard = Blueprint("dashboards", __name__, description="Customisable dashboards and leadership insight")
 
@@ -37,6 +38,7 @@ def _validate_branch(branch_id, target_business_id, log_tag=None):
 @blp_dashboard.route("/dashboard/config", methods=["POST"])
 class DashboardConfigCreateResource(MethodView):
     @token_required
+    @require_permission("dashboards", "create")
     @blp_dashboard.arguments(DashboardConfigCreateSchema, location="json")
     @blp_dashboard.response(201)
     @blp_dashboard.doc(
@@ -93,6 +95,7 @@ class DashboardConfigCreateResource(MethodView):
 @blp_dashboard.route("/dashboard/config", methods=["GET"])
 class DashboardConfigGetResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.arguments(DashboardConfigIdQuerySchema, location="query")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Get a dashboard configuration", security=[{"Bearer": []}])
@@ -112,6 +115,7 @@ class DashboardConfigGetResource(MethodView):
 @blp_dashboard.route("/dashboard/config", methods=["PATCH"])
 class DashboardConfigUpdateResource(MethodView):
     @token_required
+    @require_permission("dashboards", "update")
     @blp_dashboard.arguments(DashboardConfigUpdateSchema, location="json")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Update dashboard config (type, department)", security=[{"Bearer": []}])
@@ -138,6 +142,7 @@ class DashboardConfigUpdateResource(MethodView):
 @blp_dashboard.route("/dashboard/config/by-member", methods=["GET"])
 class DashboardConfigByMemberResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.arguments(DashboardConfigByMemberQuerySchema, location="query")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Get dashboard config for a specific member", security=[{"Bearer": []}])
@@ -157,6 +162,7 @@ class DashboardConfigByMemberResource(MethodView):
 @blp_dashboard.route("/dashboard/widget/add", methods=["POST"])
 class DashboardAddWidgetResource(MethodView):
     @token_required
+    @require_permission("dashboards", "update")
     @blp_dashboard.arguments(DashboardAddWidgetSchema, location="json")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Add a widget to the dashboard", security=[{"Bearer": []}])
@@ -182,6 +188,7 @@ class DashboardAddWidgetResource(MethodView):
 @blp_dashboard.route("/dashboard/widget/remove", methods=["POST"])
 class DashboardRemoveWidgetResource(MethodView):
     @token_required
+    @require_permission("dashboards", "update")
     @blp_dashboard.arguments(DashboardRemoveWidgetSchema, location="json")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Remove a widget from the dashboard", security=[{"Bearer": []}])
@@ -207,6 +214,7 @@ class DashboardRemoveWidgetResource(MethodView):
 @blp_dashboard.route("/dashboard/widget/reorder", methods=["POST"])
 class DashboardReorderWidgetsResource(MethodView):
     @token_required
+    @require_permission("dashboards", "update")
     @blp_dashboard.arguments(DashboardReorderWidgetsSchema, location="json")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Reorder dashboard widgets (drag-and-drop)", security=[{"Bearer": []}])
@@ -232,6 +240,7 @@ class DashboardReorderWidgetsResource(MethodView):
 @blp_dashboard.route("/dashboard/widgets/available", methods=["GET"])
 class DashboardAvailableWidgetsResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.arguments(DashboardAvailableWidgetsQuerySchema, location="query")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="List all available widgets with descriptions", security=[{"Bearer": []}])
@@ -271,6 +280,7 @@ class DashboardAvailableWidgetsResource(MethodView):
 @blp_dashboard.route("/dashboard/data", methods=["GET"])
 class DashboardDataResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.arguments(DashboardDataQuerySchema, location="query")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(
@@ -335,6 +345,7 @@ class DashboardDataResource(MethodView):
 @blp_dashboard.route("/dashboard/widget/data", methods=["GET"])
 class DashboardWidgetDataResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.arguments(DashboardWidgetDataQuerySchema, location="query")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Get data for a single widget (for lazy loading or refresh)", security=[{"Bearer": []}])
@@ -368,6 +379,7 @@ class DashboardWidgetDataResource(MethodView):
 @blp_dashboard.route("/dashboard/executive", methods=["GET"])
 class ExecutiveDashboardResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Senior pastor executive dashboard (pre-built)", security=[{"Bearer": []}])
     def get(self):
@@ -397,6 +409,7 @@ class ExecutiveDashboardResource(MethodView):
 @blp_dashboard.route("/dashboard/admin", methods=["GET"])
 class AdminDashboardResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Church administrator operational dashboard (pre-built)", security=[{"Bearer": []}])
     def get(self):
@@ -426,6 +439,7 @@ class AdminDashboardResource(MethodView):
 @blp_dashboard.route("/dashboard/finance", methods=["GET"])
 class FinanceDashboardResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Finance officer financial dashboard (pre-built)", security=[{"Bearer": []}])
     def get(self):
@@ -453,6 +467,7 @@ class FinanceDashboardResource(MethodView):
 @blp_dashboard.route("/dashboard/branch", methods=["GET"])
 class BranchDashboardResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Campus/branch dashboard (pre-built)", security=[{"Bearer": []}])
     def get(self):
@@ -481,6 +496,7 @@ class BranchDashboardResource(MethodView):
 @blp_dashboard.route("/dashboard/department", methods=["GET"])
 class DepartmentDashboardResource(MethodView):
     @token_required
+    @require_permission("dashboards", "read")
     @blp_dashboard.response(200)
     @blp_dashboard.doc(summary="Department/ministry-level dashboard (pre-built)", security=[{"Bearer": []}])
     def get(self):

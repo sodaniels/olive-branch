@@ -25,12 +25,9 @@ from ...schemas.church.donation_schema import (
 from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag, _resolve_business_id
 from ...utils.logger import Log
-
-from ...constants.church_permissions import has_permission
 from ...decorators.permission_decorator import require_permission
 
 blp_donation = Blueprint("donations", __name__, description="Donations, contributions, giving cards, and donation links")
-
 
 
 # ════════════════════════════ DONATION — CREATE ════════════════════════════
