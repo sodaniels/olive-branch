@@ -1190,7 +1190,7 @@ class Member(BaseModel):
         # Remove None after processing
         updates = {k: v for k, v in updates.items() if v is not None}
 
-        return super().update(member_id, business_id, **updates)
+        return super().update(member_id, business_id, is_member_self_service=True, **updates)
 
     # ── Indexes ──
     @classmethod

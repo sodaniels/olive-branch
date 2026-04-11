@@ -146,6 +146,7 @@ def token_required(f):
             user.pop('password', None)
             user.pop('email_hashed', None)
             user.pop('client_id_hashed', None)
+            user.pop('client_id', None)
             user.pop('email_verified', None)
             user.pop('updated_at', None)
             user.pop('pin', None)
@@ -201,6 +202,7 @@ def token_required(f):
                         user.pop('password', None)
                         user.pop('email_hashed', None)
                         user.pop('client_id_hashed', None)
+                        user.pop('client_id', None)
                         user.pop('email_verified', None)
                         user.pop('updated_at', None)
                         

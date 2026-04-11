@@ -20,16 +20,23 @@ class BaseModel:
     """
     collection_name = None
 
-    def __init__(self, business_id, user_id=None, user__id=None, agent_id=None, admin_id=None, created_by=None, **kwargs):
+    def __init__(self, business_id, branch_id=None, member_id=None, user_id=None, user__id=None, agent_id=None, admin_id=None, created_by=None, **kwargs):
         self.business_id = ObjectId(business_id)
         self.user_id = user_id
         self.user__id = ObjectId(user__id)
+        self.member_id = ObjectId(member_id)
+        
+        if branch_id:
+            self.branch_id = ObjectId(branch_id)
+        if member_id:
+            self.member_id = ObjectId(member_id)
         if agent_id:
             self.agent_id = agent_id
         if admin_id:
             self.admin_id = ObjectId(admin_id)
         if created_by:
             self.created_by = ObjectId(created_by)
+        
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
 
@@ -150,14 +157,14 @@ class BaseModel:
         return [cls(**record) for record in records]
 
     @classmethod
-    def update(cls, record_id, business_id, processing_callback=False, **updates):
+    def update(cls, record_id, business_id, processing_callback=False, is_member_self_service=False, **updates):
         """
         Update a record by its ID after checking permission.
         """
         
         
         # Permission if permission is allowed and not callback processing
-        if not processing_callback:
+        if not (processing_callback or is_member_self_service):
             cls.verify_permission("update", cls.__name__.lower())
         
         if business_id is not None:

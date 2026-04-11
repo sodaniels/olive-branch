@@ -117,6 +117,8 @@ class Role(BaseModel):
         business_id,
         user_id,
         user__id,
+        branch_id,
+        member_id,
         name,
         email,
         admin_id=None,
@@ -131,6 +133,8 @@ class Role(BaseModel):
         """
         admin_id_obj = ObjectId(admin_id) if admin_id else None
         created_by_obj = ObjectId(created_by) if created_by else None
+        branch_id_obj = ObjectId(branch_id) if branch_id else None
+        member_id_obj = ObjectId(member_id) if member_id else None
 
         super().__init__(
             business_id,
@@ -141,6 +145,8 @@ class Role(BaseModel):
             admin_id=admin_id_obj,
             status=status,
             created_by=created_by_obj,
+            branch_id=branch_id_obj,
+            member_id=member_id_obj,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -201,18 +207,7 @@ class Role(BaseModel):
         if not data:
             return None
 
-        if "_id" in data:
-            data["_id"] = str(data["_id"])
-        if "business_id" in data:
-            data["business_id"] = str(data["business_id"])
-        if "user__id" in data:
-            data["user__id"] = str(data["user__id"])
-        if "user_id" in data and data["user_id"] is not None:
-            data["user_id"] = str(data["user_id"])
-        if "admin_id" in data and data["admin_id"] is not None:
-            data["admin_id"] = str(data["admin_id"])
-        if "created_by" in data and data["created_by"] is not None:
-            data["created_by"] = str(data["created_by"])
+        data = _stringify_object_ids(data)
 
         name = decrypt_data(data["name"]) if data.get("name") else None
         email = decrypt_data(data["email"]) if data.get("email") else None
@@ -236,6 +231,8 @@ class Role(BaseModel):
         return {
             "role_id": data["_id"],
             "business_id": data["business_id"],
+            "branch_id": data.get("branch_id"),
+            "member_id": data.get("member_id"),
             "name": name,
             "email": email,
             "status": status,
@@ -256,18 +253,7 @@ class Role(BaseModel):
             if created_by_val is None:
                 continue
 
-            if "_id" in r:
-                r["_id"] = str(r["_id"])
-            if "business_id" in r:
-                r["business_id"] = str(r["business_id"])
-            if "user__id" in r:
-                r["user__id"] = str(r["user__id"])
-            if "user_id" in r and r["user_id"] is not None:
-                r["user_id"] = str(r["user_id"])
-            if "admin_id" in r and r["admin_id"] is not None:
-                r["admin_id"] = str(r["admin_id"])
-            if "created_by" in r and r["created_by"] is not None:
-                r["created_by"] = str(r["created_by"])
+            r = _stringify_object_ids(r)
 
             name = decrypt_data(r["name"]) if r.get("name") else None
             email = decrypt_data(r["email"]) if r.get("email") else None
@@ -288,6 +274,8 @@ class Role(BaseModel):
                 {
                     "role_id": r["_id"],
                     "business_id": r["business_id"],
+                    "branch_id": r.get("branch_id"),
+                    "member_id": r.get("member_id"),
                     "name": name,
                     "email": email,
                     "status": status,
@@ -315,18 +303,8 @@ class Role(BaseModel):
         processed = []
 
         for r in payload.get("items", []):
-            if "_id" in r:
-                r["_id"] = str(r["_id"])
-            if "business_id" in r:
-                r["business_id"] = str(r["business_id"])
-            if "user__id" in r:
-                r["user__id"] = str(r["user__id"])
-            if "user_id" in r and r["user_id"] is not None:
-                r["user_id"] = str(r["user_id"])
-            if "admin_id" in r and r["admin_id"] is not None:
-                r["admin_id"] = str(r["admin_id"])
-            if "created_by" in r and r["created_by"] is not None:
-                r["created_by"] = str(r["created_by"])
+            
+            r = _stringify_object_ids(r)
 
             name = decrypt_data(r["name"]) if r.get("name") else None
             email = decrypt_data(r["email"]) if r.get("email") else None
@@ -347,6 +325,8 @@ class Role(BaseModel):
                 {
                     "role_id": r["_id"],
                     "business_id": r["business_id"],
+                    "branch_id": r.get("branch_id"),
+                    "member_id": r.get("member_id"),
                     "name": name,
                     "email": email,
                     "status": status,
@@ -460,20 +440,24 @@ class Expense(BaseModel):
     def __init__(
         self,
         business_id,
+        branch_id,
         user_id,
         user__id,
         name,
         description,
         date,
+        memeber_id=None,
         category=None,
         amount=0.0,
         status="Active",
     ):
         super().__init__(
             business_id,
+            branch_id,
             user_id,
             user__id,
             name=name,
+            memeber_id=memeber_id,
             description=description,
             category=category,
             date=date,
@@ -519,11 +503,7 @@ class Expense(BaseModel):
         if not data:
             return None
 
-        data["_id"] = str(data["_id"])
-        if "business_id" in data:
-            data["business_id"] = str(data["business_id"])
-        if "user__id" in data:
-            data["user__id"] = str(data["user__id"])
+        data = _stringify_object_ids(data)
 
         data["name"] = decrypt_data(data["name"]) if data.get("name") else None
         data["description"] = decrypt_data(data["description"]) if data.get("description") else None
@@ -551,12 +531,8 @@ class Expense(BaseModel):
         processed = []
 
         for expense in payload.get("items", []):
-            if "_id" in expense:
-                expense["_id"] = str(expense["_id"])
-            if "business_id" in expense:
-                expense["business_id"] = str(expense["business_id"])
-            if "user__id" in expense:
-                expense["user__id"] = str(expense["user__id"])
+            
+            expense = _stringify_object_ids(expense)
 
             expense["name"] = decrypt_data(expense["name"]) if expense.get("name") else None
             expense["description"] = decrypt_data(expense["description"]) if expense.get("description") else None
@@ -590,12 +566,8 @@ class Expense(BaseModel):
         processed = []
 
         for expense in payload.get("items", []):
-            if "_id" in expense:
-                expense["_id"] = str(expense["_id"])
-            if "user__id" in expense:
-                expense["user__id"] = str(expense["user__id"])
-            if "business_id" in expense:
-                expense["business_id"] = str(expense["business_id"])
+            
+            expense = _stringify_object_ids(expense)
 
             expense["name"] = decrypt_data(expense["name"]) if expense.get("name") else None
             expense["description"] = decrypt_data(expense["description"]) if expense.get("description") else None
@@ -663,6 +635,8 @@ class Admin(BaseModel):
     def __init__(
         self,
         business_id: str,
+        branch_id: str,
+        member_id: str,
         role: Optional[str],
         user_id: Optional[str],
         password: Optional[str] = None,
@@ -689,6 +663,8 @@ class Admin(BaseModel):
 
         super().__init__(
             business_id=business_id,
+            branch_id=branch_id,
+            member_id=member_id,
             user_id=user_id,
             role=role_obj,
             phone=phone,
@@ -831,6 +807,8 @@ class Admin(BaseModel):
 
         return {
             "system_user_id": data["_id"],
+            "branch_id": data.get("branch_id"),
+            "member_id": data.get("member_id"),
             "business_id": data["business_id"],
             "user_id": str(data.get("user_id")) if data.get("user_id") is not None else None,
             "created_by": str(data.get("created_by")) if data.get("created_by") is not None else None,
@@ -927,6 +905,8 @@ class Admin(BaseModel):
 
             user: Dict[str, Any] = {
                 "system_user_id": system_user_id,
+                "branch_id": data.get("branch_id"),
+                "member_id": data.get("member_id"),
                 "business_id": str(data.get("business_id")),
                 "user_id": user_id,
                 "created_by": created_by,
@@ -1015,6 +995,8 @@ class Admin(BaseModel):
 
             user: Dict[str, Any] = {
                 "system_user_id": system_user_id,
+                "branch_id": data.get("branch_id"),
+                "member_id": data.get("member_id"),
                 "business_id": str(data.get("business_id")),
                 "user_id": user_id,
                 "created_by": created_by,
@@ -1062,6 +1044,8 @@ class Admin(BaseModel):
 
         return {
             "system_user_id": str(data.get("_id")),
+            "branch_id": data.get("branch_id"),
+            "member_id": data.get("member_id"),
             "business_id": str(data.get("business_id")),
             "role": str(data.get("role")) if data.get("role") else None,
             "fullname": decrypted["fullname"],
@@ -1117,6 +1101,8 @@ class Admin(BaseModel):
 
         return {
             "system_user_id": str(data.get("_id")),
+            "branch_id": data.get("branch_id"),
+            "member_id": data.get("member_id"),
             "business_id": str(data.get("business_id")),
             "role": str(data.get("role")) if data.get("role") else None,
             "fullname": decrypted["fullname"],
@@ -1172,6 +1158,8 @@ class Admin(BaseModel):
 
         return {
             "system_user_id": str(data.get("_id")),
+            "branch_id": data.get("branch_id"),
+            "member_id": data.get("member_id"),
             "business_id": str(data.get("business_id")),
             "role": str(data.get("role")) if data.get("role") else None,
             "fullname": decrypted["fullname"],
@@ -1345,7 +1333,6 @@ class Admin(BaseModel):
             return {"success": True, "message": "Account status updated successfully"}
         else:
             return {"success": False, "message": "Failed to update account status"}
-    
     
     @classmethod
     def delete(cls, system_user_id: str, business_id: str) -> bool:

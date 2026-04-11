@@ -266,12 +266,15 @@ class RoleSchema(Schema):
     
     class Meta:
         unknown = INCLUDE
-        
+    
+    branch_id = fields.Str(required=True, validate=validate_objectid)   
+    member_id = fields.Str(required=True, validate=validate_objectid)   
     name = fields.Str(
         required=True,
         validate=validate.Length(min=2, max=60),
         error_messages={"required": "Name is required"}
     )
+    
     
     email = fields.Email(
         required=False,
@@ -322,12 +325,14 @@ class RoleUpdateSchema(Schema):
 # -----------------------ROLE-------------------------
 # -----------------------EXPENSE SCHEMA-------------------------
 class ExpenseSchema(Schema):
+    branch_id = fields.Str(required=True, validate=validate_objectid)   
     name = fields.Str(
         required=True,
         error_messages={
             "required": "Expense name is required",
         }
     )
+    
     description = fields.Str(
         required=True,
         validate=validate.Length(min=5, max=255),
@@ -396,6 +401,8 @@ class ExpenseUpdateSchema(Schema):
 # -----------------------SYSTEM USER SCHEMA-------------------------
 class SystemUserSchema(Schema):
 
+    branch_id = fields.Str(required=True, validate=validate_objectid)   
+    member_id = fields.Str(required=True, validate=validate_objectid) 
     fullname = fields.Str(
         required=True,
         error_messages={"required": "Full Name is required", "invalid": "Invalid Full Name"}

@@ -72,6 +72,7 @@ from ..resources import (
     blp_report,
     blp_pledge,
     blp_form,
+    blp_portal,
 )
 
 
@@ -300,6 +301,7 @@ def register_admin_routes(app, api):
         blp_report,
         blp_pledge,
         blp_form,
+        blp_portal,
         
     ]
 

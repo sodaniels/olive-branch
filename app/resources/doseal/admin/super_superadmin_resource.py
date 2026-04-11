@@ -1573,7 +1573,7 @@ class AdminResource(MethodView):
 
         tenant_id_encrypted = business.get("tenant_id")
         tenant_id = decrypt_data(tenant_id_encrypted)
-        business_name = business.get("business_name")
+        business_name = business.get("church_name")
 
         if not tenant_id:
             Log.info(f"{log_tag} Could not retrieve tenant information")
@@ -1759,11 +1759,15 @@ class AdminResource(MethodView):
                         "role": str(item_data["role"]),
                         "created_by": auth_user__id,
                         "client_id": client_id,
+                        "branch_id": item_data.get("branch_id"),
                         "business_id": target_business_id,
                         "status": "Active",
                         "email_verified": "verified",
                         "account_type": "admin",
                     }
+                    
+                    if item_data.get("member_id") is not None:
+                        user_data["member_id"] = item_data.get("member_id")
 
                     user = User(**user_data)
                     user__id = user.save()
@@ -2623,7 +2627,7 @@ class ResendResetPasswordLinkResource(MethodView):
             Log.info(f"{log_tag} Error retrieving business: {e}")
             return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.")
 
-        business_name = business.get("business_name")
+        business_name = business.get("church_name")
 
         # ----------------- VERIFY ADMIN EXISTS ----------------- #
         try:

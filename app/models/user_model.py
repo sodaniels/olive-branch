@@ -23,6 +23,8 @@ class User(BaseModel):
         password,
         client_id,
         business_id,
+        branch_id=None,
+        member_id=None,
         fullname=None,
         email=None,
         status="Inactive",
@@ -47,6 +49,8 @@ class User(BaseModel):
             tenant_id=tenant_id,
             business_id=business_id,
             user_id=user_id,
+            branch_id=branch_id,
+            member_id=member_id,
         )
 
         # ----------------------
@@ -60,6 +64,11 @@ class User(BaseModel):
 
         self.system_user_id = ObjectId(system_user_id) if system_user_id else None
         self.role = ObjectId(role) if role else None
+        
+        if branch_id:
+            self.branch_id = ObjectId(branch_id)
+        if member_id:
+            self.member_id = ObjectId(member_id)
 
         if admin_id is not None and admin_id != "":
             self.admin_id = ObjectId(admin_id)
@@ -156,6 +165,8 @@ class User(BaseModel):
             {
                 "user_id": self.user_id,
                 "tenant_id": self.tenant_id,
+                "branch_id": getattr(self, "branch_id", None),
+                "member_id": getattr(self, "member_id", None),
                 "role": self.role,
                 "type": self.type,
                 "business_id": self.business_id,
