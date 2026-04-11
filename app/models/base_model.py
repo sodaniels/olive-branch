@@ -20,6 +20,7 @@ from ..utils.crypt import encrypt_data, hash_data, decrypt_data
 from ..utils.logger import Log
 
 
+
 class BaseModel:
     """
     Base class for all models providing CRUD, permissions, and pagination.
@@ -104,6 +105,7 @@ class BaseModel:
         "manage": "manage",
     }
 
+
     def __init__(self, business_id, branch_id=None, member_id=None,
                  user_id=None, user__id=None, agent_id=None,
                  admin_id=None, created_by=None, **kwargs):
@@ -132,6 +134,34 @@ class BaseModel:
         return {key: getattr(self, key) for key in self.__dict__}
 
     @staticmethod
+    def _safe_decrypt_field(value):
+        """Decrypt a field if it's encrypted, otherwise return as-is."""
+        if not value or not isinstance(value, str):
+            return value
+        # Plain text values are short (e.g. "CHURCH_ADMIN", "SUPER_ADMIN", "PASTOR")
+        # Encrypted values are long base64 strings
+        if len(value) <= 30:
+            return value
+        try:
+            return decrypt_data(value)
+        except Exception:
+            return value
+        
+    def _safe_account_type(value):
+        """Extract account_type, decrypting if needed, always returns uppercase string."""
+        if not value or not isinstance(value, str):
+            return ""
+        # Short strings are plain text role names
+        if len(value) <= 30:
+            return value.upper()
+        # Long strings might be encrypted
+        try:
+            decrypted = decrypt_data(value)
+            return decrypted.upper() if decrypted else ""
+        except Exception:
+            return value.upper()
+            
+    @staticmethod
     def _is_bcrypt_hash(s: str) -> bool:
         return isinstance(s, str) and (
             s.startswith("$2a$") or s.startswith("$2b$") or s.startswith("$2y$")
@@ -150,47 +180,21 @@ class BaseModel:
 
     @classmethod
     def check_permission(cls, operation, custom_model_name=None):
-        """
-        Check if the current user has the required permission.
-
-        Args:
-            operation: "create", "read", "update", "delete", "approve", "export", etc.
-            custom_model_name: override model name for module resolution
-
-        Returns:
-            bool
-        """
         if not hasattr(g, "current_user") or not g.current_user:
             raise PermissionError("No current user found for permission check.")
 
         user_info = g.current_user
-        
-        account_type = str.upper(user_info.get("account_type", ""))
-        
-        # Decrypt if encrypted
-        if account_type and len(str(account_type)) > 20:
-            try:
-                from ..utils.crypt import decrypt_data
-                account_type = decrypt_data(account_type)
-            except Exception:
-                pass
+        account_type = cls._safe_account_type(user_info.get("account_type"))
 
-        # 1. SYSTEM_OWNER — god-level, cross-business
-        if account_type in (ROLE_SYSTEM_OWNER, "SYSTEM_OWNER", ROLE_SUPER_ADMIN, "SUPER_ADMIN", "BUSINESS_OWNER"):
+        # 1. God-level bypass
+        if account_type in ("SYSTEM_OWNER", "SUPER_ADMIN", "BUSINESS_OWNER"):
             return True
 
-        # 2. SUPER_ADMIN / BUSINESS_OWNER — full access within own business
-        if account_type in (
-            "SUPER_ADMIN", ROLE_SUPER_ADMIN,
-            SYSTEM_USERS.get("BUSINESS_OWNER", "BUSINESS_OWNER"), "BUSINESS_OWNER",
-        ):
-            return True
-
-        # 3. Church role-based check via church_permissions
+        # 2. Church role-based check
         module_key = cls._resolve_module_key(custom_model_name)
         action = cls._OPERATION_TO_ACTION.get(operation, operation)
         return _church_has_permission(user_info, module_key, action)
-
+    
     @classmethod
     def verify_permission(cls, operation, model_name=None):
         resolved = model_name or cls.__name__.lower()

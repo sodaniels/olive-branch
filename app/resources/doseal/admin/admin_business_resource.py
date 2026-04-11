@@ -109,12 +109,23 @@ blp_business_auth = Blueprint("Church Auth", __name__, url_prefix="/v1/auth", de
 blp_admin_preauth = Blueprint("Admin Pre Auth", __name__, url_prefix="/v1/auth", description="Admin Pre Auth Management")
 
 
+def _safe_decrypt_field(value):
+    """Decrypt a field if it's encrypted, otherwise return as-is."""
+    if not value or not isinstance(value, str):
+        return value
+    if len(value) <= 30:
+        return value
+    try:
+        return decrypt_data(value)
+    except Exception:
+        return value
+
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Get the Authorization header
         auth_header = request.headers.get('Authorization')
-        
+
         if not auth_header or not auth_header.startswith("Bearer "):
             abort(401, message="Authentication Required")
 
@@ -124,17 +135,16 @@ def token_required(f):
         log_tag = f"[business_resources.py][token_required]"
 
         try:
-            # Decode the access token
             data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
 
             try:
                 user = User.get_user_by_user__id(data.get("user_id"))
             except Exception as e:
                 Log.info(f"{log_tag} error retrieving user: {str(e)}")
-            
+
             if user is None:
                 abort(401, message="Invalid access token")
-                
+
             try:
                 s_user = User.get_system_user_by__id(user.get("system_user_id"))
                 if s_user:
@@ -150,12 +160,13 @@ def token_required(f):
             user.pop('email_verified', None)
             user.pop('updated_at', None)
             user.pop('pin', None)
-            
-            account_type = decrypt_data(user.get("account_type"))
-            # Log.info(f"{log_tag}: account_type: {account_type}" )
-            
+
+            # Safe decrypt — handles both plain text and encrypted account_type
+            account_type = _safe_decrypt_field(user.get("account_type"))
+
             if account_type not in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]):
-                permissions = data.get('permissions')
+                # For non-privileged users: use permissions from JWT first, fall back to user record
+                permissions = data.get('permissions') or user.get('permissions')
                 user['permissions'] = permissions
                 user['account_type'] = account_type
             else:
@@ -164,64 +175,67 @@ def token_required(f):
             g.current_user = user
 
         except jwt.ExpiredSignatureError:
-            # Handle expired access token
             refresh_token = None
-            
-            # Try to get refresh token from different sources
+
             if request.is_json and request.json:
                 refresh_token = request.json.get('refresh_token')
             elif request.form:
                 refresh_token = request.form.get('refresh_token')
             elif request.headers.get('X-Refresh-Token'):
                 refresh_token = request.headers.get('X-Refresh-Token')
-            
+
             if not refresh_token:
                 abort(401, message="Token expired, and no refresh token provided")
-            
+
             try:
-                # Decode and verify the refresh token
                 refresh_data = jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"])
-                
-                # Get user data for the new token
                 user_id = refresh_data['user_id']
-                
+
                 new_access_token = jwt.encode({
                     'user_id': user_id,
-                    'account_type': refresh_data.get('account_type'),  # Include account_type if needed
+                    'account_type': refresh_data.get('account_type'),
                     'exp': datetime.utcnow() + timedelta(minutes=15)
                 }, SECRET_KEY, algorithm='HS256')
 
-                # Update token in database
                 Token.create_token(user_id, new_access_token, refresh_token, 900, 604800)
-                
-                # Get user data and set g.current_user
+
                 try:
                     user = User.get_user_by_user__id(user_id)
                     if user:
-                        # Clean up and set user data (same as above)
                         user.pop('password', None)
                         user.pop('email_hashed', None)
                         user.pop('client_id_hashed', None)
                         user.pop('client_id', None)
                         user.pop('email_verified', None)
                         user.pop('updated_at', None)
-                        
-                        try:
-                            role = Role.get_by_id(user.get("role"))
-                            if role is not None:
-                                permissions = role.get('permissions')
-                                user['permissions'] = permissions
-                                user['account_type'] = refresh_data.get('account_type')
-                        except:
-                            Log.error("Failed to get role for user_id: %s")
-                        
+
+                        # Safe decrypt for refreshed user too
+                        account_type = _safe_decrypt_field(user.get("account_type")) or refresh_data.get('account_type')
+
+                        if account_type not in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"], SYSTEM_USERS["BUSINESS_OWNER"]):
+                            # Load permissions from user record (stored during role assignment)
+                            permissions = user.get('permissions')
+
+                            # Fallback: load from role if not on user record
+                            if not permissions:
+                                try:
+                                    role_id = user.get("role_id") or user.get("role")
+                                    if role_id:
+                                        role = Role.get_by_id(role_id)
+                                        if role:
+                                            permissions = role.get('permissions')
+                                except Exception:
+                                    Log.error(f"{log_tag} failed to load role permissions for user_id: {user_id}")
+
+                            user['permissions'] = permissions or {}
+
+                        user['account_type'] = account_type
                         g.current_user = user
-                        
-                        # Add new token to response headers
+
                         response = make_response(f(*args, **kwargs))
                         response.headers['X-New-Access-Token'] = new_access_token
                         return response
-                        
+
                 except Exception as e:
                     Log.error(f"Error getting user data after token refresh: {str(e)}")
                     abort(401, message="Invalid user")
@@ -235,7 +249,6 @@ def token_required(f):
         except jwt.InvalidTokenError:
             abort(401, message="Invalid access token")
 
-        # Check if the token exists in MongoDB
         stored_token = Token.get_token(token)
         if not stored_token:
             abort(401, message="Invalid token")
@@ -243,7 +256,6 @@ def token_required(f):
         return f(*args, **kwargs)
 
     return decorated
-
 
 #-------------------------------------------------------
 # REGISTER

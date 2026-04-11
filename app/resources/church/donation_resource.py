@@ -26,7 +26,11 @@ from ...utils.json_response import prepared_response
 from ...utils.helpers import make_log_tag, _resolve_business_id
 from ...utils.logger import Log
 
+from ...constants.church_permissions import has_permission
+from ...decorators.permission_decorator import require_permission
+
 blp_donation = Blueprint("donations", __name__, description="Donations, contributions, giving cards, and donation links")
+
 
 
 # ════════════════════════════ DONATION — CREATE ════════════════════════════
@@ -34,6 +38,7 @@ blp_donation = Blueprint("donations", __name__, description="Donations, contribu
 @blp_donation.route("/donation", methods=["POST"])
 class DonationCreateResource(MethodView):
     @token_required
+    @require_permission("donations", "create")
     @blp_donation.arguments(DonationCreateSchema, location="json")
     @blp_donation.response(201)
     @blp_donation.doc(
@@ -104,35 +109,27 @@ class DonationCreateResource(MethodView):
 
             Log.info(f"{log_tag} recording donation")
             start_time = time.time()
-
             donation = Donation(**json_data)
             did = donation.save()
-
             duration = time.time() - start_time
             Log.info(f"{log_tag} donation.save() returned {did} in {duration:.2f}s")
 
             if not did:
                 return prepared_response(False, "BAD_REQUEST", "Failed to record donation.")
 
-            # Adjust fund balance if linked and completed
             amount = json_data.get("amount", 0)
             if fund_id and json_data.get("payment_status") == "Completed":
                 Fund.adjust_balance(fund_id, target_business_id, amount)
-
-            # Adjust account balance if linked and completed
             if account_id and json_data.get("payment_status") == "Completed":
                 Account.adjust_balance(account_id, target_business_id, amount)
 
-            # Update donation link stats if from a link
             link_id = json_data.get("donation_link_id")
             if link_id:
                 DonationLink.increment_stats(link_id, target_business_id, amount)
 
-            # Add timeline event on member
             if member_id:
                 Member.add_timeline_event(
-                    member_id, target_business_id,
-                    event_type="donation",
+                    member_id, target_business_id, event_type="donation",
                     description=f"Donation: {json_data.get('currency', 'GBP')} {amount} ({json_data.get('giving_type', 'Offering')})",
                     performed_by=auth_user__id,
                 )
@@ -154,27 +151,30 @@ class DonationCreateResource(MethodView):
 @blp_donation.route("/donation", methods=["GET", "DELETE"])
 class DonationGetDeleteResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationIdQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get a donation record with receipt info", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info)
+        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+
         d = Donation.get_by_id(qd.get("donation_id"), target_business_id)
         if not d:
             return prepared_response(False, "NOT_FOUND", "Donation not found.")
         return prepared_response(True, "OK", "Donation retrieved.", data=d)
 
     @token_required
+    @require_permission("donations", "delete")
     @blp_donation.arguments(DonationIdQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Delete a donation (only pending/cancelled)", security=[{"Bearer": []}])
     def delete(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info)
+        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+
         existing = Donation.get_by_id(qd.get("donation_id"), target_business_id)
         if not existing:
-            Log.info(f"Donation delete failed: not found: {qd.get('donation_id')}")
             return prepared_response(False, "NOT_FOUND", "Donation not found.")
         if existing.get("payment_status") not in ("Pending", "Cancelled"):
             return prepared_response(False, "CONFLICT", "Only pending or cancelled donations can be deleted. Use refund for completed.")
@@ -190,14 +190,15 @@ class DonationGetDeleteResource(MethodView):
 @blp_donation.route("/donation", methods=["PATCH"])
 class DonationUpdateResource(MethodView):
     @token_required
+    @require_permission("donations", "update")
     @blp_donation.arguments(DonationUpdateSchema, location="json")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Update a donation (type, fund, status, notes)", security=[{"Bearer": []}])
     def patch(self, d):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
-        did = d.pop("donation_id")
 
+        did = d.pop("donation_id")
         existing = Donation.get_by_id(did, target_business_id)
         if not existing:
             return prepared_response(False, "NOT_FOUND", "Donation not found.")
@@ -227,12 +228,14 @@ class DonationUpdateResource(MethodView):
 @blp_donation.route("/donations", methods=["GET"])
 class DonationListResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationListQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="List donations with filters (fund, branch, date, donor, type, method)", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+
         r = Donation.get_all(
             target_business_id, page=qd.get("page", 1), per_page=qd.get("per_page", 50),
             giving_type=qd.get("giving_type"), payment_status=qd.get("payment_status"),
@@ -252,12 +255,14 @@ class DonationListResource(MethodView):
 @blp_donation.route("/donations/by-member", methods=["GET"])
 class DonationByMemberResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationByMemberQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get donation history for a specific member", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         r = Donation.get_by_member(target_business_id, qd["member_id"], start_date=qd.get("start_date"), end_date=qd.get("end_date"), page=qd.get("page", 1), per_page=qd.get("per_page", 50))
         if not r.get("donations"):
             return prepared_response(False, "NOT_FOUND", "No donations found.")
@@ -269,12 +274,14 @@ class DonationByMemberResource(MethodView):
 @blp_donation.route("/donation/receipt", methods=["GET"])
 class DonationReceiptResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationReceiptQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Look up a donation by receipt number", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         d = Donation.get_by_receipt(target_business_id, qd["receipt_number"])
         if not d:
             return prepared_response(False, "NOT_FOUND", "No donation found with this receipt number.")
@@ -286,16 +293,18 @@ class DonationReceiptResource(MethodView):
 @blp_donation.route("/donation/receipt/sent", methods=["POST"])
 class DonationReceiptSentResource(MethodView):
     @token_required
+    @require_permission("donations", "update")
     @blp_donation.arguments(DonationReceiptSentSchema, location="json")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Mark a donation receipt as sent to the donor", security=[{"Bearer": []}])
-    def post(self, d):
+    def post(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
-        existing = Donation.get_by_id(d["donation_id"], target_business_id)
+
+        existing = Donation.get_by_id(qd["donation_id"], target_business_id)
         if not existing:
             return prepared_response(False, "NOT_FOUND", "Donation not found.")
-        ok = Donation.mark_receipt_sent(d["donation_id"], target_business_id)
+        ok = Donation.mark_receipt_sent(qd["donation_id"], target_business_id)
         if ok:
             return prepared_response(True, "OK", "Receipt marked as sent.")
         return prepared_response(False, "BAD_REQUEST", "Failed to update.")
@@ -306,28 +315,28 @@ class DonationReceiptSentResource(MethodView):
 @blp_donation.route("/donation/refund", methods=["POST"])
 class DonationRefundResource(MethodView):
     @token_required
+    @require_permission("donations", "refund")
     @blp_donation.arguments(DonationRefundSchema, location="json")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Refund a completed donation", security=[{"Bearer": []}])
-    def post(self, d):
+    def post(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
-        existing = Donation.get_by_id(d["donation_id"], target_business_id)
+
+        existing = Donation.get_by_id(qd["donation_id"], target_business_id)
         if not existing:
             return prepared_response(False, "NOT_FOUND", "Donation not found.")
         if existing.get("payment_status") != "Completed":
             return prepared_response(False, "CONFLICT", f"Cannot refund: donation status is '{existing.get('payment_status')}'.")
 
-        ok = Donation.refund(d["donation_id"], target_business_id, d.get("refund_reason"))
+        ok = Donation.refund(qd["donation_id"], target_business_id, qd.get("refund_reason"))
         if ok:
-            # Reverse fund/account balances
             amount = existing.get("amount", 0)
             if existing.get("fund_id"):
                 Fund.adjust_balance(existing["fund_id"], target_business_id, -amount)
             if existing.get("account_id"):
                 Account.adjust_balance(existing["account_id"], target_business_id, -amount)
-
-            updated = Donation.get_by_id(d["donation_id"], target_business_id)
+            updated = Donation.get_by_id(qd["donation_id"], target_business_id)
             return prepared_response(True, "OK", "Donation refunded. Balances reversed.", data=updated)
         return prepared_response(False, "BAD_REQUEST", "Failed to refund.")
 
@@ -337,6 +346,7 @@ class DonationRefundResource(MethodView):
 @blp_donation.route("/donations/contribution-statement", methods=["GET"])
 class ContributionStatementResource(MethodView):
     @token_required
+    @require_permission("donations", "export")
     @blp_donation.arguments(ContributionStatementQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Generate contribution statement for a member (year-end / tax)", security=[{"Bearer": []}])
@@ -362,12 +372,14 @@ class ContributionStatementResource(MethodView):
 @blp_donation.route("/donations/tax-year-donors", methods=["GET"])
 class TaxYearDonorsResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(TaxYearDonorsQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get all donors for a tax year (for batch tax statement generation)", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+        target_business_id = _resolve_business_id(user_info)
+
         r = Donation.get_donors_for_tax_year(target_business_id, qd["tax_year"], branch_id=qd.get("branch_id"), min_amount=qd.get("min_amount"))
         return prepared_response(True, "OK", "Tax year donors.", data=r)
 
@@ -377,12 +389,14 @@ class TaxYearDonorsResource(MethodView):
 @blp_donation.route("/donations/mailing-labels", methods=["GET"])
 class MailingLabelsResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(MailingLabelsQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get mailing labels for physical statement distribution", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+        target_business_id = _resolve_business_id(user_info)
+
         r = Donation.get_mailing_labels(target_business_id, qd["tax_year"], branch_id=qd.get("branch_id"))
         return prepared_response(True, "OK", "Mailing labels.", data=r)
 
@@ -392,12 +406,14 @@ class MailingLabelsResource(MethodView):
 @blp_donation.route("/donations/summary", methods=["GET"])
 class DonationSummaryResource(MethodView):
     @token_required
+    @require_permission("donations", "export")
     @blp_donation.arguments(DonationSummaryQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Giving dashboard summary", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+        target_business_id = _resolve_business_id(user_info)
+
         r = Donation.get_summary(target_business_id, start_date=qd.get("start_date"), end_date=qd.get("end_date"), branch_id=qd.get("branch_id"))
         return prepared_response(True, "OK", "Donation summary.", data=r)
 
@@ -407,12 +423,15 @@ class DonationSummaryResource(MethodView):
 @blp_donation.route("/donations/trends", methods=["GET"])
 class DonationTrendsResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationTrendsQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Giving trends over time (for charts)", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
-        target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+        target_business_id = _resolve_business_id(user_info)
+
+
         r = Donation.get_trends(target_business_id, start_date=qd.get("start_date"), end_date=qd.get("end_date"), branch_id=qd.get("branch_id"), group_by=qd.get("group_by", "month"))
         return prepared_response(True, "OK", "Donation trends.", data=r)
 
@@ -422,6 +441,7 @@ class DonationTrendsResource(MethodView):
 @blp_donation.route("/donation/giving-card", methods=["POST"])
 class GivingCardCreateResource(MethodView):
     @token_required
+    @require_permission("donations", "create")
     @blp_donation.arguments(GivingCardCreateSchema, location="json")
     @blp_donation.response(201)
     @blp_donation.doc(summary="Create a giving card for a member", security=[{"Bearer": []}])
@@ -450,12 +470,14 @@ class GivingCardCreateResource(MethodView):
 @blp_donation.route("/donation/giving-card", methods=["GET"])
 class GivingCardGetResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(GivingCardIdQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get a giving card", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         gc = GivingCard.get_by_id(qd["card_id"], target_business_id)
         if not gc:
             return prepared_response(False, "NOT_FOUND", "Giving card not found.")
@@ -465,12 +487,14 @@ class GivingCardGetResource(MethodView):
 @blp_donation.route("/donation/giving-card/lookup", methods=["GET"])
 class GivingCardLookupResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(GivingCardCodeQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Look up a giving card by card code", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         gc = GivingCard.get_by_code(target_business_id, qd["card_code"])
         if not gc:
             return prepared_response(False, "NOT_FOUND", "Giving card not found.")
@@ -480,12 +504,14 @@ class GivingCardLookupResource(MethodView):
 @blp_donation.route("/donation/giving-cards/by-member", methods=["GET"])
 class GivingCardByMemberResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(GivingCardByMemberQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get all giving cards for a member", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         cards = GivingCard.get_by_member(target_business_id, qd["member_id"])
         return prepared_response(True, "OK", f"{len(cards)} card(s).", data={"cards": cards, "count": len(cards)})
 
@@ -495,6 +521,7 @@ class GivingCardByMemberResource(MethodView):
 @blp_donation.route("/donation/link", methods=["POST"])
 class DonationLinkCreateResource(MethodView):
     @token_required
+    @require_permission("donations", "create")
     @blp_donation.arguments(DonationLinkCreateSchema, location="json")
     @blp_donation.response(201)
     @blp_donation.doc(summary="Create a custom donation link for church website", security=[{"Bearer": []}])
@@ -512,7 +539,6 @@ class DonationLinkCreateResource(MethodView):
             if not Branch.get_by_id(branch_id, target_business_id):
                 return prepared_response(False, "NOT_FOUND", f"Branch '{branch_id}' not found.")
 
-        # Check slug uniqueness
         existing_slug = DonationLink.get_by_slug(target_business_id, json_data["slug"])
         if existing_slug:
             return prepared_response(False, "CONFLICT", f"Slug '{json_data['slug']}' is already in use.")
@@ -536,24 +562,29 @@ class DonationLinkCreateResource(MethodView):
 @blp_donation.route("/donation/link", methods=["GET", "DELETE"])
 class DonationLinkGetDeleteResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationLinkIdQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Get a donation link", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
+
         dl = DonationLink.get_by_id(qd["link_id"], target_business_id)
         if not dl:
             return prepared_response(False, "NOT_FOUND", "Donation link not found.")
         return prepared_response(True, "OK", "Donation link.", data=dl)
 
     @token_required
+    @require_permission("donations", "delete")
     @blp_donation.arguments(DonationLinkIdQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Delete a donation link", security=[{"Bearer": []}])
     def delete(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         existing = DonationLink.get_by_id(qd["link_id"], target_business_id)
         if not existing:
             return prepared_response(False, "NOT_FOUND", "Donation link not found.")
@@ -569,12 +600,14 @@ class DonationLinkGetDeleteResource(MethodView):
 @blp_donation.route("/donation/link", methods=["PATCH"])
 class DonationLinkUpdateResource(MethodView):
     @token_required
+    @require_permission("donations", "update")
     @blp_donation.arguments(DonationLinkUpdateSchema, location="json")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Update a donation link", security=[{"Bearer": []}])
     def patch(self, d):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         lid = d.pop("link_id")
         existing = DonationLink.get_by_id(lid, target_business_id)
         if not existing:
@@ -596,12 +629,14 @@ class DonationLinkUpdateResource(MethodView):
 @blp_donation.route("/donation/link/by-slug", methods=["GET"])
 class DonationLinkBySlugResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationLinkSlugQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="Look up a donation link by slug (for website embedding)", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info)
+
         dl = DonationLink.get_by_slug(target_business_id, qd["slug"])
         if not dl:
             return prepared_response(False, "NOT_FOUND", "Donation link not found.")
@@ -611,11 +646,13 @@ class DonationLinkBySlugResource(MethodView):
 @blp_donation.route("/donation/links", methods=["GET"])
 class DonationLinkListResource(MethodView):
     @token_required
+    @require_permission("donations", "read")
     @blp_donation.arguments(DonationLinkListQuerySchema, location="query")
     @blp_donation.response(200)
     @blp_donation.doc(summary="List all donation links", security=[{"Bearer": []}])
     def get(self, qd):
         user_info = g.get("current_user", {}) or {}
         target_business_id = _resolve_business_id(user_info, qd.get("business_id"))
+
         r = DonationLink.get_all(target_business_id, page=qd.get("page", 1), per_page=qd.get("per_page", 50))
         return prepared_response(True, "OK", "Donation links.", data=r)
