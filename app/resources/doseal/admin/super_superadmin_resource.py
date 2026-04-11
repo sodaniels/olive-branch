@@ -99,745 +99,745 @@ blp_expense = Blueprint("Expense", __name__,  description="Expense Management")
 
 # -----------------------------ROLE-----------------------------------
 
-@blp_admin_role.route("/role", methods=["POST", "GET", "PATCH", "DELETE"])
-class RoleResource(MethodView):
-    # ------------------------- CREATE ROLE (POST) ---------------------------- #
+# @blp_admin_role.route("/role", methods=["POST", "GET", "PATCH", "DELETE"])
+# class RoleResource(MethodView):
+#     # ------------------------- CREATE ROLE (POST) ---------------------------- #
     
-    @crud_write_limiter("role")
-    @token_required
-    @blp_admin_role.arguments(RoleSchema, location="json")
-    @blp_admin_role.response(201, RoleSchema)
-    @blp_admin_role.doc(
-        summary="Create a new role",
-        description="""
-            Create a new role for a business.
+#     @crud_write_limiter("role")
+#     @token_required
+#     @blp_admin_role.arguments(RoleSchema, location="json")
+#     @blp_admin_role.response(201, RoleSchema)
+#     @blp_admin_role.doc(
+#         summary="Create a new role",
+#         description="""
+#             Create a new role for a business.
 
-            • SYSTEM_OWNER / SUPER_ADMIN:
-                - May submit business_id in the payload to create a role for any business.
-                - If omitted, defaults to their own business_id.
+#             • SYSTEM_OWNER / SUPER_ADMIN:
+#                 - May submit business_id in the payload to create a role for any business.
+#                 - If omitted, defaults to their own business_id.
 
-            • Other roles:
-                - business_id is always forced to the authenticated user's business_id.
-        """,
-        security=[{"Bearer": []}],
-    )
-    def post(self, item_data):
-        """Handle the POST request to create a new role."""
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
+#             • Other roles:
+#                 - business_id is always forced to the authenticated user's business_id.
+#         """,
+#         security=[{"Bearer": []}],
+#     )
+#     def post(self, item_data):
+#         """Handle the POST request to create a new role."""
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
 
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-        account_type_enc = user_info.get("account_type")
-        account_type = account_type_enc if account_type_enc else None
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+#         account_type_enc = user_info.get("account_type")
+#         account_type = account_type_enc if account_type_enc else None
 
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
-        form_business_id = item_data.get("business_id")
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
-        else:
-            target_business_id = auth_business_id
+#         # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
+#         form_business_id = item_data.get("business_id")
+#         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+#             target_business_id = form_business_id
+#         else:
+#             target_business_id = auth_business_id
 
-        # Normalise payload
-        item_data["business_id"] = target_business_id
-        item_data["user__id"] = auth_user__id
-        if not item_data.get("user_id"):
-            item_data["user_id"] = user_info.get("user_id")
+#         # Normalise payload
+#         item_data["business_id"] = target_business_id
+#         item_data["user__id"] = auth_user__id
+#         if not item_data.get("user_id"):
+#             item_data["user_id"] = user_info.get("user_id")
 
-        # Role creator/admin
-        item_data["admin_id"] = str(user_info.get("_id")) if user_info.get("_id") else None
-        item_data["created_by"] = str(user_info.get("_id")) if user_info.get("_id") else None
+#         # Role creator/admin
+#         item_data["admin_id"] = str(user_info.get("_id")) if user_info.get("_id") else None
+#         item_data["created_by"] = str(user_info.get("_id")) if user_info.get("_id") else None
 
-        log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "RoleResource",
-            "post",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            target_business_id,
-        )
+#         log_tag = make_log_tag(
+#             "super_superadmin_resource.py",
+#             "RoleResource",
+#             "post",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             target_business_id,
+#         )
 
-        # ----------------- Normalise permissions only for provided fields ----------------- #
-        # Normalise permissions only for fields PROVIDED in payload
-        for perm_field, actions in PERMISSION_FIELDS_FOR_ADMIN_ROLE.items():
-            if perm_field in item_data:  # <-- key change (not "and item_data[perm_field]")
-                raw_list = item_data.get(perm_field) or []
+#         # ----------------- Normalise permissions only for provided fields ----------------- #
+#         # Normalise permissions only for fields PROVIDED in payload
+#         for perm_field, actions in PERMISSION_FIELDS_FOR_ADMIN_ROLE.items():
+#             if perm_field in item_data:  # <-- key change (not "and item_data[perm_field]")
+#                 raw_list = item_data.get(perm_field) or []
 
-                normalised_list = []
-                for entry in raw_list:
-                    entry = entry or {}
-                    norm = {action: entry.get(action, "0") for action in actions}
-                    normalised_list.append(norm)
+#                 normalised_list = []
+#                 for entry in raw_list:
+#                     entry = entry or {}
+#                     norm = {action: entry.get(action, "0") for action in actions}
+#                     normalised_list.append(norm)
 
-                # if user passed empty list, we keep it empty so model can clear it
-                item_data[perm_field] = normalised_list
+#                 # if user passed empty list, we keep it empty so model can clear it
+#                 item_data[perm_field] = normalised_list
 
-        # ----------------- Duplicate check ----------------- #
-        name = item_data.get("name")
-        email = item_data.get("email")
+#         # ----------------- Duplicate check ----------------- #
+#         name = item_data.get("name")
+#         email = item_data.get("email")
 
-        Log.info(f"{log_tag} checking if role already exists")
-        try:
-            exists = Role.check_role_exists(
-                admin_id=item_data["admin_id"],
-                name_key="name",
-                name_value=name,
-                email_key="email",
-                email_value=email,
-            )
-        except Exception as e:
-            Log.info(f"{log_tag} error while checking duplicate role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An error occurred while validating role uniqueness.",
-                errors=str(e),
-            )
+#         Log.info(f"{log_tag} checking if role already exists")
+#         try:
+#             exists = Role.check_role_exists(
+#                 admin_id=item_data["admin_id"],
+#                 name_key="name",
+#                 name_value=name,
+#                 email_key="email",
+#                 email_value=email,
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag} error while checking duplicate role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An error occurred while validating role uniqueness.",
+#                 errors=str(e),
+#             )
 
-        if exists:
-            Log.info(f"{log_tag} role already exists")
-            return prepared_response(
-                False,
-                "CONFLICT",
-                "Role already exists.",
-            )
+#         if exists:
+#             Log.info(f"{log_tag} role already exists")
+#             return prepared_response(
+#                 False,
+#                 "CONFLICT",
+#                 "Role already exists.",
+#             )
 
-        Log.info(f"{log_tag} creating role with payload: {item_data}")
+#         Log.info(f"{log_tag} creating role with payload: {item_data}")
 
-        # ----------------- Create and save ----------------- #
-        role = Role(**item_data)
+#         # ----------------- Create and save ----------------- #
+#         role = Role(**item_data)
 
-        try:
-            Log.info(f"{log_tag} committing role transaction")
-            start_time = time.time()
-            role_id = role.save()
-            duration = time.time() - start_time
+#         try:
+#             Log.info(f"{log_tag} committing role transaction")
+#             start_time = time.time()
+#             role_id = role.save()
+#             duration = time.time() - start_time
 
-            Log.info(f"{log_tag} role created with id={role_id} in {duration:.2f} sec")
+#             Log.info(f"{log_tag} role created with id={role_id} in {duration:.2f} sec")
 
-            if role_id:
-                return prepared_response(
-                    True,
-                    "CREATED",
-                    "Role created successfully.",
-                )
+#             if role_id:
+#                 return prepared_response(
+#                     True,
+#                     "CREATED",
+#                     "Role created successfully.",
+#                 )
 
-            Log.info(f"{log_tag} save returned None")
-            return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to create role.")
+#             Log.info(f"{log_tag} save returned None")
+#             return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to create role.")
 
-        except PyMongoError as e:
-            Log.info(f"{log_tag} PyMongoError while creating role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while creating the role.",
-                errors=str(e),
-            )
-        except Exception as e:
-            Log.info(f"{log_tag} unexpected error while creating role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
+#         except PyMongoError as e:
+#             Log.info(f"{log_tag} PyMongoError while creating role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while creating the role.",
+#                 errors=str(e),
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag} unexpected error while creating role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred.",
+#                 errors=str(e),
+#             )
 
-    # ---------------------- GET SINGLE ROLE (role-aware) ---------------------- #
+#     # ---------------------- GET SINGLE ROLE (role-aware) ---------------------- #
     
-    @crud_read_limiter("role")
-    @token_required
-    @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
-    @blp_admin_role.response(200, RoleSchema)
-    @blp_admin_role.doc(
-        summary="Retrieve role by role_id (role-aware)",
-        description="""
-            Retrieve a role by `role_id`, enforcing role-based access:
-
-            • SYSTEM_OWNER / SUPER_ADMIN:
-                - may submit ?business_id=<id> to target any business
-                - if omitted, defaults to their own business_id
-
-            • Other roles:
-                - always restricted to their own business_id.
-        """,
-        security=[{"Bearer": []}],
-    )
-    def get(self, role_data):
-        role_id = role_data.get("role_id")
-        query_business_id = role_data.get("business_id")
-
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
-
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-        account_type_enc = user_info.get("account_type")
-        account_type = account_type_enc if account_type_enc else None
-
-        # Initial log_tag
-        log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "RoleResource",
-            "get",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            query_business_id or auth_business_id,
-        )
-
-        Log.info(f"{log_tag} retrieving role")
-
-        if not role_id:
-            Log.info(f"{log_tag} role_id not provided")
-            return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
-
-        try:
-            # Business resolution based on role
-            if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
-                target_business_id = query_business_id or auth_business_id
-                log_tag = make_log_tag(
-                    "super_superadmin_resource.py",
-                    "RoleResource",
-                    "get",
-                    client_ip,
-                    auth_user__id,
-                    account_type,
-                    auth_business_id,
-                    target_business_id,
-                )
-                Log.info(
-                    f"{log_tag}[role_id:{role_id}] "
-                    f"super_admin/system_owner requesting role. "
-                    f"target_business_id={target_business_id}"
-                )
-            else:
-                target_business_id = auth_business_id
-                log_tag = make_log_tag(
-                    "super_superadmin_resource.py",
-                    "RoleResource",
-                    "get",
-                    client_ip,
-                    auth_user__id,
-                    account_type,
-                    auth_business_id,
-                    target_business_id,
-                )
-                Log.info(
-                    f"{log_tag}[role_id:{role_id}] "
-                    f"non-admin requesting role in own business"
-                )
-
-            start_time = time.time()
-            role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
-            duration = time.time() - start_time
-
-            Log.info(
-                f"{log_tag}[role_id:{role_id}] "
-                f"retrieving role completed in {duration:.2f} seconds"
-            )
-
-            if not role:
-                Log.info(f"{log_tag}[role_id:{role_id}] role not found")
-                return prepared_response(False, "NOT_FOUND", "Role not found.")
-
-            Log.info(f"{log_tag}[role_id:{role_id}] role found")
-            return prepared_response(
-                True,
-                "OK",
-                "Role retrieved successfully.",
-                data=role,
-            )
-
-        except PyMongoError as e:
-            Log.info(f"{log_tag}[role_id:{role_id}] PyMongoError while retrieving role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while retrieving the role.",
-                errors=str(e),
-            )
-        except Exception as e:
-            Log.info(f"{log_tag}[role_id:{role_id}] unexpected error while retrieving role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
-
-    # ---------------------- UPDATE ROLE (role-aware PATCH) ---------------------- #
-    @crud_write_limiter("role")
-    @token_required
-    @blp_admin_role.arguments(RoleUpdateSchema, location="json")
-    @blp_admin_role.response(200, RoleUpdateSchema)
-    @blp_admin_role.doc(
-        summary="Update an existing role (role-aware)",
-        description="""
-            Update an existing role by providing `role_id` and fields to change.
-
-            • SYSTEM_OWNER / SUPER_ADMIN:
-                - may submit business_id in the payload to select target business
-                - if omitted, defaults to their own business_id
-
-            • Other roles:
-                - always restricted to their own business_id.
-        """,
-        security=[{"Bearer": []}],
-    )
-    def patch(self, item_data):
-        """Handle the PATCH request to update an existing role."""
-        role_id = item_data.get("role_id")
-
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
-
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-        account_type_enc = user_info.get("account_type")
-        account_type = account_type_enc if account_type_enc else None
-
-        # Optional business_id override for system_owner/super_admin
-        form_business_id = item_data.get("business_id")
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
-            target_business_id = form_business_id
-        else:
-            target_business_id = auth_business_id
-
-        # Normalise payload
-        item_data["business_id"] = target_business_id
-        item_data["user_id"] = user_info.get("user_id")
-        item_data["user__id"] = auth_user__id
-
-        log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "RoleResource",
-            "patch",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            target_business_id,
-        )
-
-        Log.info(f"{log_tag}[role_id:{role_id}] updating role")
-
-        if not role_id:
-            Log.info(f"{log_tag} role_id not provided")
-            return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
-
-        # Ensure role exists within target business scope
-        try:
-            role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
-        except Exception as e:
-            Log.info(f"{log_tag} error checking role existence: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while checking the role.",
-                errors=str(e),
-            )
-
-        if not role:
-            Log.info(f"{log_tag} role not found")
-            return prepared_response(False, "NOT_FOUND", "Role not found.")
-
-        # ----------------- Normalise permissions only for provided fields ----------------- #
-        for perm_field, actions in PERMISSION_FIELDS_FOR_ADMIN_ROLE.items():
-            if perm_field in item_data and item_data[perm_field]:
-                normalised_list = []
-                for entry in item_data[perm_field]:
-                    norm = {}
-                    for action in actions:
-                        norm[action] = entry.get(action, "0")
-                    normalised_list.append(norm)
-                item_data[perm_field] = normalised_list
-
-        # Attempt to update the role data
-        try:
-            Log.info(f"{log_tag} updating role (PATCH)")
-            start_time = time.time()
-
-            # Don't try to overwrite id
-            item_data.pop("role_id", None)
-
-            update_ok = Role.update(role_id, **item_data)
-            duration = time.time() - start_time
-
-            if update_ok:
-                Log.info(f"{log_tag} role updated in {duration:.2f} seconds")
-                return prepared_response(True, "OK", "Role updated successfully.")
-            else:
-                Log.info(f"{log_tag} update returned False")
-                return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to update role.")
-
-        except PyMongoError as e:
-            Log.info(f"{log_tag} PyMongoError while updating role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while updating the role.",
-                errors=str(e),
-            )
-        except Exception as e:
-            Log.info(f"{log_tag} unexpected error while updating role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
-
-    # ---------------------- DELETE ROLE (role-aware) ---------------------- #
-    @crud_delete_limiter("role")
-    @token_required
-    @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
-    @blp_admin_role.response(200)
-    @blp_admin_role.doc(
-        summary="Delete a role by role_id (role-aware)",
-        description="""
-            Delete a role using `role_id` from the query parameters.
-
-            • SYSTEM_OWNER / SUPER_ADMIN:
-                - may submit ?business_id=<id> to delete from any business
-                - if omitted, defaults to their own business_id
-
-            • Other roles:
-                - deletion always restricted to their own business_id.
-        """,
-        security=[{"Bearer": []}],
-    )
-    def delete(self, role_data):
-        role_id = role_data.get("role_id")
-        query_business_id = role_data.get("business_id")
-
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
-
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-        account_type_enc = user_info.get("account_type")
-        account_type = account_type_enc if account_type_enc else None
-
-        # Admins may delete from any business using ?business_id=
-        if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
-            target_business_id = query_business_id
-        else:
-            target_business_id = auth_business_id
-
-        log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "RoleResource",
-            "delete",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            target_business_id,
-        )
-
-        Log.info(f"{log_tag} initiated delete role")
-
-        if not role_id:
-            Log.info(f"{log_tag} role_id must be provided")
-            return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
-
-        # Retrieve the role
-        try:
-            role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
-        except Exception as e:
-            Log.info(f"{log_tag} error fetching role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while retrieving the role.",
-                errors=str(e),
-            )
-
-        if not role:
-            Log.info(f"{log_tag} role not found")
-            return prepared_response(False, "NOT_FOUND", "Role not found.")
-
-        # Attempt to delete role
-        try:
-            delete_success = Role.delete(role_id, target_business_id)
-
-            if not delete_success:
-                Log.info(f"{log_tag} delete returned False")
-                return prepared_response(False, "BAD_REQUEST", "Failed to delete role.")
-
-            Log.info(f"{log_tag} role deleted successfully")
-            return prepared_response(True, "OK", "Role deleted successfully.")
-
-        except PyMongoError as e:
-            Log.info(f"{log_tag} PyMongoError while deleting role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred while deleting the role.",
-                errors=str(e),
-            )
-        except Exception as e:
-            Log.info(f"{log_tag} unexpected error while deleting role: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
-
-@blp_admin_role.route("/roles", methods=["GET"])
-class RoleListResource(MethodView):
-
-    @crud_read_limiter("role")
-    @token_required
-    @blp_admin_role.arguments(BusinessIdAndUserIdQuerySchema, location="query")
-    @blp_admin_role.response(200, RolesSchema)
-    @blp_admin_role.doc(
-        summary="Retrieve roles based on role and permissions",
-        description="""
-            Retrieve role details with role-aware access:
-
-            • SYSTEM_OWNER / SUPER_ADMIN:
-                - may pass ?business_id=<id> to target any business
-                - may optionally pass ?user_id=<id> to filter by a specific user within that business
-                - if no business_id is provided, defaults to their own business_id
-
-            • BUSINESS_OWNER:
-                - can see all roles in their own business
-                - query parameters business_id / user_id are ignored
-
-            • Other staff:
-                - restricted to roles belonging to their own user__id in their own business
-        """,
-        security=[{"Bearer": []}],
-        responses={
-            200: {
-                "description": "Role(s) retrieved successfully",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": True,
-                            "status_code": 200,
-                            "data": {
-                                "roles": [
-                                    {
-                                        "role_id": "60a6b938d4d8c24fa0804d62",
-                                        "name": "Admin",
-                                        "permissions": {
-                                            "store": [{"read": "1", "create": "1", "update": "1", "delete": "1"}],
-                                            "product": [{"read": "1", "create": "1"}],
-                                        },
-                                        "status": "Active",
-                                    }
-                                ],
-                                "total_count": 1,
-                                "total_pages": 1,
-                                "current_page": 1,
-                                "per_page": 10,
-                            }
-                        }
-                    }
-                }
-            },
-            400: {
-                "description": "Bad request",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 400,
-                            "message": "Bad request"
-                        }
-                    }
-                }
-            },
-            404: {
-                "description": "Roles not found",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 404,
-                            "message": "Roles not found"
-                        }
-                    }
-                }
-            },
-            500: {
-                "description": "Internal Server Error",
-                "content": {
-                    "application/json": {
-                        "example": {
-                            "success": False,
-                            "status_code": 500,
-                            "message": "An unexpected error occurred while retrieving the roles.",
-                            "error": "Detailed error message here"
-                        }
-                    }
-                }
-            }
-        }
-    )
-    def get(self, query_data):
-
-        # Pagination
-        page = query_data.get("page")
-        per_page = query_data.get("per_page")
-
-        # Optional filters from query (used mainly by super_admin/system_owner)
-        query_business_id = query_data.get("business_id")
-        query_user_id = query_data.get("user_id")   # treated as user__id for filtering
-
-        client_ip = request.remote_addr
-        user_info = g.get("current_user", {}) or {}
-
-        auth_user__id = str(user_info.get("_id"))
-        auth_business_id = str(user_info.get("business_id"))
-
-        account_type_enc = user_info.get("account_type")
-        account_type = account_type_enc if account_type_enc else None
-
-        # Provisional log_tag before we resolve target_business_id
-        log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "RoleListResource",
-            "get",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            query_business_id or auth_business_id,
-        )
-
-        try:
-            # -------------------------
-            # ROLE-BASED BUSINESS SCOPE
-            # -------------------------
-            if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
-                # super_admin/system_owner can see any business; default to own if not provided
-                target_business_id = query_business_id or auth_business_id
-
-                # Refresh log_tag now that we know the real target_business_id
-                log_tag = make_log_tag(
-                    "super_superadmin_resource.py",
-                    "RoleListResource",
-                    "get",
-                    client_ip,
-                    auth_user__id,
-                    account_type,
-                    auth_business_id,
-                    target_business_id,
-                )
-
-                Log.info(
-                    f"{log_tag} super_admin/system_owner: "
-                    f"target_business_id={target_business_id}, query_user_id={query_user_id}"
-                )
-
-                if query_user_id:
-                    # Filter by a specific user within the chosen business
-                    roles_result = Role.get_by_user__id_and_business_id(
-                        user__id=query_user_id,
-                        business_id=target_business_id,
-                        page=page,
-                        per_page=per_page,
-                    )
-                else:
-                    # All roles for that business
-                    roles_result = Role.get_by_business_id(
-                        business_id=target_business_id,
-                        page=page,
-                        per_page=per_page,
-                    )
-
-            elif account_type == SYSTEM_USERS["BUSINESS_OWNER"]:
-                # Business owners see all roles in their own business
-                target_business_id = auth_business_id
-
-                log_tag = make_log_tag(
-                    "super_superadmin_resource.py",
-                    "RoleListResource",
-                    "get",
-                    client_ip,
-                    auth_user__id,
-                    account_type,
-                    auth_business_id,
-                    target_business_id,
-                )
-
-                Log.info(f"{log_tag} business_owner: roles in own business")
-
-                roles_result = Role.get_by_business_id(
-                    business_id=target_business_id,
-                    page=page,
-                    per_page=per_page,
-                )
-
-            else:
-                # Staff / regular users see only their own roles in their own business
-                target_business_id = auth_business_id
-
-                log_tag = make_log_tag(
-                    "super_superadmin_resource.py",
-                    "RoleListResource",
-                    "get",
-                    client_ip,
-                    auth_user__id,
-                    account_type,
-                    auth_business_id,
-                    target_business_id,
-                )
-
-                Log.info(f"{log_tag} staff/other: own roles only")
-
-                roles_result = Role.get_by_user__id_and_business_id(
-                    user__id=auth_user__id,
-                    business_id=target_business_id,
-                    page=page,
-                    per_page=per_page,
-                )
-
-            # -------------------------
-            # NOT FOUND
-            # -------------------------
-            if not roles_result or not roles_result.get("roles"):
-                Log.info(f"{log_tag} Roles not found")
-                return prepared_response(False, "NOT_FOUND", "Roles not found")
-
-            Log.info(
-                f"{log_tag} role(s) found for "
-                f"target_business_id={target_business_id}"
-            )
-
-            # -------------------------
-            # SUCCESS RESPONSE
-            # -------------------------
-            return prepared_response(
-                True,
-                "OK",
-                "Roles retrieved successfully.",
-                data=roles_result,
-            )
-
-        except PyMongoError as e:
-            Log.info(f"{log_tag} PyMongoError while retrieving roles: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                f"An unexpected error occurred while retrieving the roles. {str(e)}",
-            )
-
-        except Exception as e:
-            Log.info(f"{log_tag} Unexpected error while retrieving roles: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                f"An unexpected error occurred. {str(e)}",
-            )
-# -----------------------------ROLE-----------------------------------
+#     @crud_read_limiter("role")
+#     @token_required
+#     @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
+#     @blp_admin_role.response(200, RoleSchema)
+#     @blp_admin_role.doc(
+#         summary="Retrieve role by role_id (role-aware)",
+#         description="""
+#             Retrieve a role by `role_id`, enforcing role-based access:
+
+#             • SYSTEM_OWNER / SUPER_ADMIN:
+#                 - may submit ?business_id=<id> to target any business
+#                 - if omitted, defaults to their own business_id
+
+#             • Other roles:
+#                 - always restricted to their own business_id.
+#         """,
+#         security=[{"Bearer": []}],
+#     )
+#     def get(self, role_data):
+#         role_id = role_data.get("role_id")
+#         query_business_id = role_data.get("business_id")
+
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
+
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+#         account_type_enc = user_info.get("account_type")
+#         account_type = account_type_enc if account_type_enc else None
+
+#         # Initial log_tag
+#         log_tag = make_log_tag(
+#             "super_superadmin_resource.py",
+#             "RoleResource",
+#             "get",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             query_business_id or auth_business_id,
+#         )
+
+#         Log.info(f"{log_tag} retrieving role")
+
+#         if not role_id:
+#             Log.info(f"{log_tag} role_id not provided")
+#             return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
+
+#         try:
+#             # Business resolution based on role
+#             if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
+#                 target_business_id = query_business_id or auth_business_id
+#                 log_tag = make_log_tag(
+#                     "super_superadmin_resource.py",
+#                     "RoleResource",
+#                     "get",
+#                     client_ip,
+#                     auth_user__id,
+#                     account_type,
+#                     auth_business_id,
+#                     target_business_id,
+#                 )
+#                 Log.info(
+#                     f"{log_tag}[role_id:{role_id}] "
+#                     f"super_admin/system_owner requesting role. "
+#                     f"target_business_id={target_business_id}"
+#                 )
+#             else:
+#                 target_business_id = auth_business_id
+#                 log_tag = make_log_tag(
+#                     "super_superadmin_resource.py",
+#                     "RoleResource",
+#                     "get",
+#                     client_ip,
+#                     auth_user__id,
+#                     account_type,
+#                     auth_business_id,
+#                     target_business_id,
+#                 )
+#                 Log.info(
+#                     f"{log_tag}[role_id:{role_id}] "
+#                     f"non-admin requesting role in own business"
+#                 )
+
+#             start_time = time.time()
+#             role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
+#             duration = time.time() - start_time
+
+#             Log.info(
+#                 f"{log_tag}[role_id:{role_id}] "
+#                 f"retrieving role completed in {duration:.2f} seconds"
+#             )
+
+#             if not role:
+#                 Log.info(f"{log_tag}[role_id:{role_id}] role not found")
+#                 return prepared_response(False, "NOT_FOUND", "Role not found.")
+
+#             Log.info(f"{log_tag}[role_id:{role_id}] role found")
+#             return prepared_response(
+#                 True,
+#                 "OK",
+#                 "Role retrieved successfully.",
+#                 data=role,
+#             )
+
+#         except PyMongoError as e:
+#             Log.info(f"{log_tag}[role_id:{role_id}] PyMongoError while retrieving role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while retrieving the role.",
+#                 errors=str(e),
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag}[role_id:{role_id}] unexpected error while retrieving role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred.",
+#                 errors=str(e),
+#             )
+
+#     # ---------------------- UPDATE ROLE (role-aware PATCH) ---------------------- #
+#     @crud_write_limiter("role")
+#     @token_required
+#     @blp_admin_role.arguments(RoleUpdateSchema, location="json")
+#     @blp_admin_role.response(200, RoleUpdateSchema)
+#     @blp_admin_role.doc(
+#         summary="Update an existing role (role-aware)",
+#         description="""
+#             Update an existing role by providing `role_id` and fields to change.
+
+#             • SYSTEM_OWNER / SUPER_ADMIN:
+#                 - may submit business_id in the payload to select target business
+#                 - if omitted, defaults to their own business_id
+
+#             • Other roles:
+#                 - always restricted to their own business_id.
+#         """,
+#         security=[{"Bearer": []}],
+#     )
+#     def patch(self, item_data):
+#         """Handle the PATCH request to update an existing role."""
+#         role_id = item_data.get("role_id")
+
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
+
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+#         account_type_enc = user_info.get("account_type")
+#         account_type = account_type_enc if account_type_enc else None
+
+#         # Optional business_id override for system_owner/super_admin
+#         form_business_id = item_data.get("business_id")
+#         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
+#             target_business_id = form_business_id
+#         else:
+#             target_business_id = auth_business_id
+
+#         # Normalise payload
+#         item_data["business_id"] = target_business_id
+#         item_data["user_id"] = user_info.get("user_id")
+#         item_data["user__id"] = auth_user__id
+
+#         log_tag = make_log_tag(
+#             "super_superadmin_resource.py",
+#             "RoleResource",
+#             "patch",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             target_business_id,
+#         )
+
+#         Log.info(f"{log_tag}[role_id:{role_id}] updating role")
+
+#         if not role_id:
+#             Log.info(f"{log_tag} role_id not provided")
+#             return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
+
+#         # Ensure role exists within target business scope
+#         try:
+#             role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
+#         except Exception as e:
+#             Log.info(f"{log_tag} error checking role existence: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while checking the role.",
+#                 errors=str(e),
+#             )
+
+#         if not role:
+#             Log.info(f"{log_tag} role not found")
+#             return prepared_response(False, "NOT_FOUND", "Role not found.")
+
+#         # ----------------- Normalise permissions only for provided fields ----------------- #
+#         for perm_field, actions in PERMISSION_FIELDS_FOR_ADMIN_ROLE.items():
+#             if perm_field in item_data and item_data[perm_field]:
+#                 normalised_list = []
+#                 for entry in item_data[perm_field]:
+#                     norm = {}
+#                     for action in actions:
+#                         norm[action] = entry.get(action, "0")
+#                     normalised_list.append(norm)
+#                 item_data[perm_field] = normalised_list
+
+#         # Attempt to update the role data
+#         try:
+#             Log.info(f"{log_tag} updating role (PATCH)")
+#             start_time = time.time()
+
+#             # Don't try to overwrite id
+#             item_data.pop("role_id", None)
+
+#             update_ok = Role.update(role_id, **item_data)
+#             duration = time.time() - start_time
+
+#             if update_ok:
+#                 Log.info(f"{log_tag} role updated in {duration:.2f} seconds")
+#                 return prepared_response(True, "OK", "Role updated successfully.")
+#             else:
+#                 Log.info(f"{log_tag} update returned False")
+#                 return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to update role.")
+
+#         except PyMongoError as e:
+#             Log.info(f"{log_tag} PyMongoError while updating role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while updating the role.",
+#                 errors=str(e),
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag} unexpected error while updating role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred.",
+#                 errors=str(e),
+#             )
+
+#     # ---------------------- DELETE ROLE (role-aware) ---------------------- #
+#     @crud_delete_limiter("role")
+#     @token_required
+#     @blp_admin_role.arguments(RoleIdQuerySchema, location="query")
+#     @blp_admin_role.response(200)
+#     @blp_admin_role.doc(
+#         summary="Delete a role by role_id (role-aware)",
+#         description="""
+#             Delete a role using `role_id` from the query parameters.
+
+#             • SYSTEM_OWNER / SUPER_ADMIN:
+#                 - may submit ?business_id=<id> to delete from any business
+#                 - if omitted, defaults to their own business_id
+
+#             • Other roles:
+#                 - deletion always restricted to their own business_id.
+#         """,
+#         security=[{"Bearer": []}],
+#     )
+#     def delete(self, role_data):
+#         role_id = role_data.get("role_id")
+#         query_business_id = role_data.get("business_id")
+
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
+
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+#         account_type_enc = user_info.get("account_type")
+#         account_type = account_type_enc if account_type_enc else None
+
+#         # Admins may delete from any business using ?business_id=
+#         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and query_business_id:
+#             target_business_id = query_business_id
+#         else:
+#             target_business_id = auth_business_id
+
+#         log_tag = make_log_tag(
+#             "super_superadmin_resource.py",
+#             "RoleResource",
+#             "delete",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             target_business_id,
+#         )
+
+#         Log.info(f"{log_tag} initiated delete role")
+
+#         if not role_id:
+#             Log.info(f"{log_tag} role_id must be provided")
+#             return prepared_response(False, "BAD_REQUEST", "role_id must be provided.")
+
+#         # Retrieve the role
+#         try:
+#             role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
+#         except Exception as e:
+#             Log.info(f"{log_tag} error fetching role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while retrieving the role.",
+#                 errors=str(e),
+#             )
+
+#         if not role:
+#             Log.info(f"{log_tag} role not found")
+#             return prepared_response(False, "NOT_FOUND", "Role not found.")
+
+#         # Attempt to delete role
+#         try:
+#             delete_success = Role.delete(role_id, target_business_id)
+
+#             if not delete_success:
+#                 Log.info(f"{log_tag} delete returned False")
+#                 return prepared_response(False, "BAD_REQUEST", "Failed to delete role.")
+
+#             Log.info(f"{log_tag} role deleted successfully")
+#             return prepared_response(True, "OK", "Role deleted successfully.")
+
+#         except PyMongoError as e:
+#             Log.info(f"{log_tag} PyMongoError while deleting role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred while deleting the role.",
+#                 errors=str(e),
+#             )
+#         except Exception as e:
+#             Log.info(f"{log_tag} unexpected error while deleting role: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 "An unexpected error occurred.",
+#                 errors=str(e),
+#             )
+
+# @blp_admin_role.route("/roles", methods=["GET"])
+# class RoleListResource(MethodView):
+
+#     @crud_read_limiter("role")
+#     @token_required
+#     @blp_admin_role.arguments(BusinessIdAndUserIdQuerySchema, location="query")
+#     @blp_admin_role.response(200, RolesSchema)
+#     @blp_admin_role.doc(
+#         summary="Retrieve roles based on role and permissions",
+#         description="""
+#             Retrieve role details with role-aware access:
+
+#             • SYSTEM_OWNER / SUPER_ADMIN:
+#                 - may pass ?business_id=<id> to target any business
+#                 - may optionally pass ?user_id=<id> to filter by a specific user within that business
+#                 - if no business_id is provided, defaults to their own business_id
+
+#             • BUSINESS_OWNER:
+#                 - can see all roles in their own business
+#                 - query parameters business_id / user_id are ignored
+
+#             • Other staff:
+#                 - restricted to roles belonging to their own user__id in their own business
+#         """,
+#         security=[{"Bearer": []}],
+#         responses={
+#             200: {
+#                 "description": "Role(s) retrieved successfully",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "success": True,
+#                             "status_code": 200,
+#                             "data": {
+#                                 "roles": [
+#                                     {
+#                                         "role_id": "60a6b938d4d8c24fa0804d62",
+#                                         "name": "Admin",
+#                                         "permissions": {
+#                                             "store": [{"read": "1", "create": "1", "update": "1", "delete": "1"}],
+#                                             "product": [{"read": "1", "create": "1"}],
+#                                         },
+#                                         "status": "Active",
+#                                     }
+#                                 ],
+#                                 "total_count": 1,
+#                                 "total_pages": 1,
+#                                 "current_page": 1,
+#                                 "per_page": 10,
+#                             }
+#                         }
+#                     }
+#                 }
+#             },
+#             400: {
+#                 "description": "Bad request",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "success": False,
+#                             "status_code": 400,
+#                             "message": "Bad request"
+#                         }
+#                     }
+#                 }
+#             },
+#             404: {
+#                 "description": "Roles not found",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "success": False,
+#                             "status_code": 404,
+#                             "message": "Roles not found"
+#                         }
+#                     }
+#                 }
+#             },
+#             500: {
+#                 "description": "Internal Server Error",
+#                 "content": {
+#                     "application/json": {
+#                         "example": {
+#                             "success": False,
+#                             "status_code": 500,
+#                             "message": "An unexpected error occurred while retrieving the roles.",
+#                             "error": "Detailed error message here"
+#                         }
+#                     }
+#                 }
+#             }
+#         }
+#     )
+#     def get(self, query_data):
+
+#         # Pagination
+#         page = query_data.get("page")
+#         per_page = query_data.get("per_page")
+
+#         # Optional filters from query (used mainly by super_admin/system_owner)
+#         query_business_id = query_data.get("business_id")
+#         query_user_id = query_data.get("user_id")   # treated as user__id for filtering
+
+#         client_ip = request.remote_addr
+#         user_info = g.get("current_user", {}) or {}
+
+#         auth_user__id = str(user_info.get("_id"))
+#         auth_business_id = str(user_info.get("business_id"))
+
+#         account_type_enc = user_info.get("account_type")
+#         account_type = account_type_enc if account_type_enc else None
+
+#         # Provisional log_tag before we resolve target_business_id
+#         log_tag = make_log_tag(
+#             "super_superadmin_resource.py",
+#             "RoleListResource",
+#             "get",
+#             client_ip,
+#             auth_user__id,
+#             account_type,
+#             auth_business_id,
+#             query_business_id or auth_business_id,
+#         )
+
+#         try:
+#             # -------------------------
+#             # ROLE-BASED BUSINESS SCOPE
+#             # -------------------------
+#             if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]):
+#                 # super_admin/system_owner can see any business; default to own if not provided
+#                 target_business_id = query_business_id or auth_business_id
+
+#                 # Refresh log_tag now that we know the real target_business_id
+#                 log_tag = make_log_tag(
+#                     "super_superadmin_resource.py",
+#                     "RoleListResource",
+#                     "get",
+#                     client_ip,
+#                     auth_user__id,
+#                     account_type,
+#                     auth_business_id,
+#                     target_business_id,
+#                 )
+
+#                 Log.info(
+#                     f"{log_tag} super_admin/system_owner: "
+#                     f"target_business_id={target_business_id}, query_user_id={query_user_id}"
+#                 )
+
+#                 if query_user_id:
+#                     # Filter by a specific user within the chosen business
+#                     roles_result = Role.get_by_user__id_and_business_id(
+#                         user__id=query_user_id,
+#                         business_id=target_business_id,
+#                         page=page,
+#                         per_page=per_page,
+#                     )
+#                 else:
+#                     # All roles for that business
+#                     roles_result = Role.get_by_business_id(
+#                         business_id=target_business_id,
+#                         page=page,
+#                         per_page=per_page,
+#                     )
+
+#             elif account_type == SYSTEM_USERS["BUSINESS_OWNER"]:
+#                 # Business owners see all roles in their own business
+#                 target_business_id = auth_business_id
+
+#                 log_tag = make_log_tag(
+#                     "super_superadmin_resource.py",
+#                     "RoleListResource",
+#                     "get",
+#                     client_ip,
+#                     auth_user__id,
+#                     account_type,
+#                     auth_business_id,
+#                     target_business_id,
+#                 )
+
+#                 Log.info(f"{log_tag} business_owner: roles in own business")
+
+#                 roles_result = Role.get_by_business_id(
+#                     business_id=target_business_id,
+#                     page=page,
+#                     per_page=per_page,
+#                 )
+
+#             else:
+#                 # Staff / regular users see only their own roles in their own business
+#                 target_business_id = auth_business_id
+
+#                 log_tag = make_log_tag(
+#                     "super_superadmin_resource.py",
+#                     "RoleListResource",
+#                     "get",
+#                     client_ip,
+#                     auth_user__id,
+#                     account_type,
+#                     auth_business_id,
+#                     target_business_id,
+#                 )
+
+#                 Log.info(f"{log_tag} staff/other: own roles only")
+
+#                 roles_result = Role.get_by_user__id_and_business_id(
+#                     user__id=auth_user__id,
+#                     business_id=target_business_id,
+#                     page=page,
+#                     per_page=per_page,
+#                 )
+
+#             # -------------------------
+#             # NOT FOUND
+#             # -------------------------
+#             if not roles_result or not roles_result.get("roles"):
+#                 Log.info(f"{log_tag} Roles not found")
+#                 return prepared_response(False, "NOT_FOUND", "Roles not found")
+
+#             Log.info(
+#                 f"{log_tag} role(s) found for "
+#                 f"target_business_id={target_business_id}"
+#             )
+
+#             # -------------------------
+#             # SUCCESS RESPONSE
+#             # -------------------------
+#             return prepared_response(
+#                 True,
+#                 "OK",
+#                 "Roles retrieved successfully.",
+#                 data=roles_result,
+#             )
+
+#         except PyMongoError as e:
+#             Log.info(f"{log_tag} PyMongoError while retrieving roles: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 f"An unexpected error occurred while retrieving the roles. {str(e)}",
+#             )
+
+#         except Exception as e:
+#             Log.info(f"{log_tag} Unexpected error while retrieving roles: {e}")
+#             return prepared_response(
+#                 False,
+#                 "INTERNAL_SERVER_ERROR",
+#                 f"An unexpected error occurred. {str(e)}",
+#             )
+# # -----------------------------ROLE-----------------------------------
 
 # -----------------------------EXPENSE----------------------------------
 @blp_expense.route("/expense", methods=["POST", "GET", "PATCH", "DELETE"])

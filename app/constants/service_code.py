@@ -258,6 +258,7 @@ PERMISSION_FIELDS_FOR_ADMIN_ROLE = {
     "admin": ["read", "create", "update", "delete"],
 }
 
+
 PERMISSION_FIELDS_FOR_AGENT_ROLE = {
     "send_money": ["execute"],
     "senders": ["read","create", "edit", "delete", "export"],

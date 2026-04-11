@@ -74,6 +74,7 @@ from ..resources import (
     blp_form,
     blp_portal,
     blp_page_builder,
+    blp_role,
 )
 
 
@@ -304,6 +305,7 @@ def register_admin_routes(app, api):
         blp_form,
         blp_portal,
         blp_page_builder,
+        blp_role,
         
     ]
 
