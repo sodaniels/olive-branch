@@ -62,7 +62,8 @@ from ....constants.service_code import (
     PERMISSION_FIELDS_FOR_AGENT_ROLE,
     SYSTEM_USERS
 )
-
+from bson.objectid import ObjectId
+from ....extensions.db import db
 from ....models.business_model import Client, Token
 from ....models.device_model import Device
 from ....models.subscriber_model import Subscriber
@@ -80,8 +81,9 @@ from ....schemas.login_schema import LoginInitiateSchema as LoginSchema
 from ....schemas.admin.setup_schema import BusinessIdAndUserIdQuerySchema
 # models
 from ....models.admin.super_superadmin_model import (
-    Role, Expense, Admin
+    Expense, Admin
 )
+from ....models.church.role_model import Role
 from ....models.social.password_reset_token import PasswordResetToken
 from ....models.admin.subscription_model import Subscription
 from ....models.business_model import Business
@@ -1464,38 +1466,22 @@ class ExpenseResource(MethodView):
 class AdminResource(MethodView):
     
     # ------------------------- CREATE ADMIN (POST) ------------------------- #
-    @crud_write_limiter("admin")
+    @crud_read_limiter("admin")
     @token_required
     @blp_system_admin_user.arguments(SystemUserSchema, location="form")
-    @blp_system_admin_user.response(201, SystemUserSchema)
+    @blp_system_admin_user.response(200, SystemUserSchema)
     @blp_system_admin_user.doc(
-        summary="Create a new system user",
+        summary="Retrieve system user by admin_id (role-aware)",
         description="""
-            Create a new system user (admin account) for a business.
+            Retrieve a system user by `admin_id`, enforcing role-based access:
 
             • SYSTEM_OWNER / SUPER_ADMIN:
-                - May submit business_id in the payload to create an admin in any business.
-                - If omitted, defaults to their own business_id.
+                - may submit ?business_id=<id> to target any business
+                - if omitted, defaults to their own business_id
 
             • Other roles:
-                - business_id is always forced to the authenticated user's business_id.
+                - always restricted to their own business_id.
         """,
-        requestBody={
-            "required": True,
-            "content": {
-                "multipart/form-data": {
-                    "schema": SystemUserSchema,
-                    "example": {
-                        "fullname": "John Doe",
-                        "phone": "123-456-7890",
-                        "email": "johndoe@example.com",
-                        "role": "60a6b938d4d8c24fa0804d63",
-                        "password": "Secret123!",
-                        "image": "file (profile.jpg)"  # Uploaded as part of form-data
-                    }
-                }
-            },
-        },
         security=[{"Bearer": []}],
     )
     def post(self, item_data):
@@ -1507,63 +1493,40 @@ class AdminResource(MethodView):
         auth_business_id = str(user_info.get("business_id"))
         account_type_enc = user_info.get("account_type")
         account_type = account_type_enc if account_type_enc else None
-        
-        
+
         business = {}
         business_name = None
         addon_users = 0
         updated_message = None
         updated_meta = None
 
-        # Optional business_id override for SYSTEM_OWNER / SUPER_ADMIN
         form_business_id = item_data.get("business_id")
         if account_type in (SYSTEM_USERS["SYSTEM_OWNER"], SYSTEM_USERS["SUPER_ADMIN"]) and form_business_id:
             target_business_id = form_business_id
         else:
             target_business_id = auth_business_id
 
-        # Normalise payload
         item_data["business_id"] = target_business_id
         item_data["user_id"] = user_info.get("user_id")
         item_data["created_by"] = str(user_info.get("_id"))
         role_id = item_data.get("role")
-        
+
         account_status = [
-                {
-                    "account_created": {
-                        "created_at": str(datetime.utcnow()),
-                        "status": True,
-                    },
-                },
-                {
-                    "email_verified": {
-                        "status": False,
-                    }
-                },
-                {
-                    "password_chosen": {
-                        "status": False,
-                    }
-                }
-            ]
-           
+            {"account_created": {"created_at": str(datetime.utcnow()), "status": True}},
+            {"email_verified": {"status": False}},
+            {"password_chosen": {"status": False}},
+        ]
         item_data["account_status"] = account_status
-        
+
         email = item_data.get("email")
 
         log_tag = make_log_tag(
-            "super_superadmin_resource.py",
-            "AdminResource",
-            "post",
-            client_ip,
-            auth_user__id,
-            account_type,
-            auth_business_id,
-            target_business_id,
+            "super_superadmin_resource.py", "AdminResource", "post",
+            client_ip, auth_user__id, account_type, auth_business_id, target_business_id,
         )
 
+        # ── BUSINESS / TENANT RESOLUTION ──
         try:
-            # ----------------- BUSINESS / TENANT RESOLUTION ----------------- #
             business = Business.get_business_by_id(target_business_id)
             if not business:
                 Log.info(f"{log_tag} Could not retrieve business information")
@@ -1578,10 +1541,10 @@ class AdminResource(MethodView):
         if not tenant_id:
             Log.info(f"{log_tag} Could not retrieve tenant information")
             return prepared_response(False, "BAD_REQUEST", "Could not retrieve tenant information.")
-        
+
         if User.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):
             Log.info(f"{log_tag} A user with this email already exists.")
-            return prepared_response(False, "CONFLICT", f"A user with this email already exists.")
+            return prepared_response(False, "CONFLICT", "A user with this email already exists.")
 
         tenant = Essensial.get_tenant_by_id(tenant_id)
         country_iso_2 = tenant.get("country_iso_2")
@@ -1594,143 +1557,141 @@ class AdminResource(MethodView):
 
         item_data["phone"] = phone_number
 
-        # ----------------- ROLE VALIDATION ----------------- #
+        # ── ROLE VALIDATION ── ← CHANGED: extract permissions + base_role from role
+        role_permissions = {}
+        role_base_type = "MEMBER"
+
         try:
             role = Role.get_by_id(role_id=role_id, business_id=target_business_id)
             if role is None:
                 Log.info(f"{log_tag} role_id={role_id} not found for business_id={target_business_id}")
                 return prepared_response(False, "BAD_REQUEST", "The role_id could not be found.")
+
+            # ← CHANGED: extract permissions and base_role from the role
+            role_permissions = role.get("permissions", {})
+            role_base_type = role.get("base_role", "MEMBER")
+
+            # If it's a system role (no permissions dict stored), use defaults
+            if not role_permissions:
+                from ....constants.church_permissions import ROLE_PERMISSIONS
+                role_base_type = role.get("name", "MEMBER").upper().replace(" ", "_")
+                role_permissions = ROLE_PERMISSIONS.get(role_base_type, {})
+
+            Log.info(f"{log_tag} role resolved: base_role={role_base_type}, modules={len(role_permissions)}")
+
         except Exception as e:
             Log.info(f"{log_tag} error retrieving role: {e}")
             return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
+                False, "INTERNAL_SERVER_ERROR",
                 "An unexpected error occurred while retrieving the role.",
                 errors=str(e),
             )
 
-        # ----------------- UNIQUENESS CHECKS (EMAIL, PHONE) ----------------- #
+        # ← CHANGED: store permissions and account_type on admin record
+        item_data["permissions"] = role_permissions
+        item_data["account_type"] = role_base_type
+
+        # ── UNIQUENESS CHECKS ──
         should_reserve_quota = False
         Log.info(f"{log_tag} [{client_ip}] checking if admin (email) already exists")
-        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):  
+        if Admin.check_multiple_item_exists(target_business_id, {"email": item_data.get("email")}):
             return prepared_response(False, "CONFLICT", "Admin account already exists")
         else:
-            # If admin doesn't exist, we will proceed with the creation and reserve quota for it (if applicable)
             should_reserve_quota = True
-        
-        # ----------------- GET SUBSCRIPTION & ADDON USERS ----------------- #
+
+        # ── SUBSCRIPTION & ADDON USERS ──
         try:
             business_subscription = Subscription.get_active_by_business(target_business_id)
             if business_subscription:
                 addon_users = int(business_subscription.get("addon_users") or 0)
         except Exception as e:
             Log.info(f"{log_tag} error getting subscription: {e}")
-            
-        # ----------------- PLAN ENFORCER ----------------- #
+
+        # ── PLAN ENFORCER ──
         enforcer = QuotaEnforcer(target_business_id)
 
-        # ✅ Reserve quota ONLY if this is a brand new connection
         if should_reserve_quota:
             try:
                 enforcer.reserve(
-                    counter_name="max_users",
-                    limit_key="max_users",
-                    qty=1,
-                    period="billing",
-                    reason="max_users:create",
+                    counter_name="max_users", limit_key="max_users",
+                    qty=1, period="billing", reason="max_users:create",
                 )
             except PlanLimitError as e:
-                Log.info(f"{log_tag} default plan limit reached. entring checking addon_users : {e.meta}")
+                Log.info(f"{log_tag} default plan limit reached. checking addon_users: {e.meta}")
 
-                # Check if business has addon users
-                allowed_addon_users = addon_users  
-                
-                # ✅ Use the efficient count method instead of fetching all admins
+                allowed_addon_users = addon_users
                 current_admin_count = Admin.get_by_business_id_count(target_business_id)
-                
                 Log.info(f"{log_tag} current_admin_count: {current_admin_count}, allowed_addon_users: {allowed_addon_users}")
-                    
-                if current_admin_count < allowed_addon_users:  # Allow creation if within addon limits (current count includes the new admin being created)
+
+                if current_admin_count < allowed_addon_users:
                     pass
                 else:
-                    # Check if admin count exceeds allowed addon users
                     if current_admin_count >= allowed_addon_users:
                         allowed_current_admin_count = current_admin_count + 1
                         allowed_addon_users_plus_one = allowed_addon_users + 1
-                        
-                        Log.info(f"{log_tag} admin count exceeds allowed addon users: {allowed_current_admin_count} >= {allowed_addon_users}")
-                        
-                        # Update the error meta with correct current and limit values
+
                         updated_meta = e.meta.copy() if e.meta else {}
                         updated_meta["current"] = allowed_current_admin_count
                         updated_meta["limit"] = allowed_addon_users_plus_one
                         updated_meta["addon_users"] = addon_users
-                        updated_meta["base_users"] = 1  # Default user every business has
-                        
-                        # Update message to reflect addon users
-                        updated_message = f"User limit reached. You have {allowed_current_admin_count} of {allowed_addon_users_plus_one} allowed users (including {addon_users} addon user(s)). Upgrade your plan or purchase more addon users to continue."
-                        
+                        updated_meta["base_users"] = 1
+
+                        updated_message = (
+                            f"User limit reached. You have {allowed_current_admin_count} of "
+                            f"{allowed_addon_users_plus_one} allowed users (including {addon_users} "
+                            f"addon user(s)). Upgrade your plan or purchase more addon users."
+                        )
                         return prepared_response(False, "FORBIDDEN", updated_message, errors=updated_meta)
-                    
+
                     return prepared_response(False, "FORBIDDEN", e.message, errors=e.meta)
 
-    
-    
-        # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
+        # ── IMAGE UPLOAD (OPTIONAL) ──
         uploaded_payload = dict()
-        
+
         try:
             image = request.files["image"]
             if (image is not None) and (image.filename == ""):
                 return jsonify({"success": False, "message": "invalid image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-            
+
             if not (image.mimetype).startswith("image/"):
                 return jsonify({"success": False, "message": "file must be an image"}), HTTP_STATUS_CODES["BAD_REQUEST"]
-            
+
             uploaded_payload = {}
-        
             user_id = str(user_info.get("_id") or "")
             folder = f"profile/{target_business_id}/{user_id}"
             public_id = uuid.uuid4().hex
-            Log.info(f"{log_tag} Uploading profile image for business_id: {target_business_id}, user_id: {user_id}, filename: {image.filename}")
+            Log.info(f"{log_tag} Uploading profile image")
             uploaded = upload_image_file(image, folder=folder, public_id=public_id)
             raw = uploaded.get("raw") or {}
-            
+
             if uploaded is not None:
-                
                 uploaded_payload = {
                     "asset_id": uploaded.get("public_id"),
                     "public_id": uploaded.get("public_id"),
                     "asset_provider": "cloudinary",
                     "asset_type": "image",
                     "url": uploaded.get("url"),
-
                     "width": raw.get("width"),
                     "height": raw.get("height"),
                     "format": raw.get("format"),
                     "bytes": raw.get("bytes"),
                     "created_at": _utc_now().isoformat(),
                 }
-            
         except Exception as e:
             Log.info(f"{log_tag} Error uploading profile image: {str(e)}")
-            
+
         if uploaded_payload.get("asset_id") is not None:
             item_data["image"] = uploaded_payload
-        # ----------------- IMAGE UPLOAD (OPTIONAL) ----------------- #
-        
-        
-        # ----------------- HASH PASSWORD ----------------- #
+
+        # ── HASH PASSWORD ──
         temp_password = time.time()
         item_data["password"] = str(temp_password)
         item_data["password"] = bcrypt.hashpw(
-            item_data["password"].encode("utf-8"),
-            bcrypt.gensalt()
+            item_data["password"].encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
 
-        # ----------------- CREATE ADMIN ----------------- #
+        # ── CREATE ADMIN ──
         item = Admin(**item_data)
-        
         user__id = None
 
         try:
@@ -1740,12 +1701,9 @@ class AdminResource(MethodView):
             system_user_id = item.save()
             duration = time.time() - start_time
 
-            Log.info(
-                f"{log_tag} [{client_ip}][{system_user_id}] committing system user "
-                f"completed in {duration:.2f} seconds"
-            )
+            Log.info(f"{log_tag} [{client_ip}][{system_user_id}] admin created in {duration:.2f}s")
 
-            # Also create corresponding User record (if Admin creation succeeded)
+            # ── CREATE USER RECORD ── ← CHANGED: use role_base_type + permissions
             try:
                 if system_user_id:
                     client_id = business.get("client_id")
@@ -1756,120 +1714,121 @@ class AdminResource(MethodView):
                         "email": item_data["email"],
                         "phone_number": item_data["phone"],
                         "password": item_data["password"],
-                        "role": str(item_data["role"]),
+                        "role": str(item_data["role"]),          # role_id as string
+                        "role_id": str(item_data["role"]),       # ← CHANGED: also store as role_id
                         "created_by": auth_user__id,
                         "client_id": client_id,
                         "branch_id": item_data.get("branch_id"),
+                        "member_id": item_data.get("member_id"),
                         "business_id": target_business_id,
                         "status": "Active",
                         "email_verified": "verified",
-                        "account_type": "admin",
+                        "account_type": role_base_type, 
+                        "permissions": role_permissions,          # ← CHANGED: store permissions on user
                     }
-                    
-                    if item_data.get("member_id") is not None:
-                        user_data["member_id"] = item_data.get("member_id")
+
+                    # Remove None values
+                    user_data = {k: v for k, v in user_data.items() if v is not None}
 
                     user = User(**user_data)
                     user__id = user.save()
-                    Log.info(f"{log_tag} user__id: {user__id}")
+                    Log.info(f"{log_tag} user created: user__id={user__id}, account_type={role_base_type}")
+
+                    # ← CHANGED: update admin record with user__id back-link
+                    try:
+                        admins_coll = db.get_collection("admins")
+                        admins_coll.update_one(
+                            {"_id": ObjectId(system_user_id)},
+                            {"$set": {"user__id": ObjectId(user__id)}},
+                        )
+                        Log.info(f"{log_tag} admin back-linked to user__id={user__id}")
+                    except Exception as e:
+                        Log.error(f"{log_tag} failed to back-link admin to user: {e}")
+
                 else:
-                    Log.info(f"{log_tag} Failed to stor user, delete uploaded image.")
-                    
-                    import cloudinary
-                    import cloudinary.uploader
-                    public_id = uploaded.get("public_id")
-                    
-                    result = cloudinary.uploader.destroy(
-                        public_id,
-                        resource_type="image",
-                    )
-                    Log.info(f"{log_tag} result: {result}")
-            
+                    Log.info(f"{log_tag} Failed to create admin, cleaning up image.")
+                    try:
+                        import cloudinary
+                        import cloudinary.uploader
+                        public_id = uploaded.get("public_id")
+                        result = cloudinary.uploader.destroy(public_id, resource_type="image")
+                        Log.info(f"{log_tag} image cleanup result: {result}")
+                    except Exception:
+                        pass
+
             except Exception as e:
-                Log.info(f"{log_tag} Failed to upsert: {e}")
+                Log.info(f"{log_tag} Failed to create user: {e}")
                 if should_reserve_quota:
                     enforcer.release(counter_name="max_users", qty=1, period="billing")
-                Log.error(f"{log_tag}[{client_ip}][{system_user_id}] error creating User record: {str(e)}")
-               
-  
+                Log.error(f"{log_tag} error creating User record: {str(e)}")
+
             if system_user_id is not None:
-                
-                # send email to newly created admin to reset their password 
+
+                # ── SEND INVITATION EMAIL ──
                 try:
-                    
-                    return_url= os.getenv("ADMIN_RESET_PASSWORD_RETURN_URL", "http://app.schedulefy.org")
- 
-                    # Create password reset token (5 minutes expiry)
+                    return_url = os.getenv("ADMIN_RESET_PASSWORD_RETURN_URL", "http://app.schedulefy.org")
+
                     success, reset_token, error = PasswordResetToken.create_token(
-                        email=email,
-                        user_id=user__id,
-                        business_id=target_business_id,
-                        expiry_minutes=10
+                        email=email, user_id=user__id,
+                        business_id=target_business_id, expiry_minutes=10,
                     )
-                    
+
                     if not success:
                         Log.error(f"{log_tag} Failed to create reset token: {error}")
-                        return prepared_response(
-                            False,
-                            "INTERNAL_SERVER_ERROR",
-                            "Failed to initiate password reset"
-                        )
-                        
-                    # Generate full reset URL with token
+                        return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to initiate password reset")
+
                     reset_url = generate_confirm_admin_email_token(return_url, reset_token)
-                    
+
                     try:
                         email_result = send_admin_invitation_email(
-                            email=email,
-                            confirmation_url=reset_url,
-                            admin_name=item_data.get("fullname"),
-                            business_name=business_name
+                            email=email, confirmation_url=reset_url,
+                            admin_name=item_data.get("fullname"), business_name=business_name,
                         )
                         Log.info(f"Email sent result={email_result}")
-                        
+
                         if email_result.get("ok"):
-                            Log.info(f"{log_tag} Admin password reset email sent successfully")
+                            Log.info(f"{log_tag} invitation email sent")
                             return jsonify(
-                                success=True,
-                                status_code=200,
+                                success=True, status_code=200,
                                 message="Password reset link sent to email",
-                                message_to_show="We sent a password reset link to the email address of the admin. Please ask them to check their email and click on the link to proceed. The link will expire in 10 minutes."
+                                message_to_show=(
+                                    "We sent a password reset link to the email address of the admin. "
+                                    "Please ask them to check their email and click on the link to proceed. "
+                                    "The link will expire in 10 minutes."
+                                ),
+                                data={                                          # ← CHANGED: return useful info
+                                    "admin_id": str(system_user_id),
+                                    "user__id": str(user__id),
+                                    "account_type": role_base_type,
+                                    "role_id": str(role_id),
+                                },
                             ), 200
                         else:
                             Log.error(f"{log_tag} Email sending failed: {email_result.get('error')}")
-                            return prepared_response(
-                                False,
-                                "INTERNAL_SERVER_ERROR",
-                                "Failed to send password reset email"
-                            )
+                            return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to send password reset email")
                     except Exception as e:
                         Log.error(f"Email sending failed: {e}")
                         raise
-                        
+
                 except Exception as e:
-                    Log.info(f"{log_tag}\t An error occurred sending emails: {e}")
-                  
-                  
-                return prepared_response(True, "OK", "Admin created successfully.")
+                    Log.info(f"{log_tag} An error occurred sending emails: {e}")
+
+                return prepared_response(True, "OK", "Admin created successfully.", data={
+                    "admin_id": str(system_user_id),
+                    "user__id": str(user__id),
+                    "account_type": role_base_type,
+                    "role_id": str(role_id),
+                })
             else:
                 return prepared_response(False, "INTERNAL_SERVER_ERROR", "Failed to create system user.")
 
         except PyMongoError as e:
-            Log.info(f"{log_tag} PyMongoError while creating admin: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
+            Log.info(f"{log_tag} PyMongoError: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
         except Exception as e:
-            Log.info(f"{log_tag} unexpected error while creating admin: {e}")
-            return prepared_response(
-                False,
-                "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred.",
-                errors=str(e),
-            )
+            Log.info(f"{log_tag} unexpected error: {e}")
+            return prepared_response(False, "INTERNAL_SERVER_ERROR", "An unexpected error occurred.", errors=str(e))
+        
     
     # ---------------------- GET SINGLE ADMIN (role-aware) ---------------------- #
     @crud_read_limiter("admin")
@@ -1890,6 +1849,7 @@ class AdminResource(MethodView):
         """,
         security=[{"Bearer": []}],
     )
+    
     def get(self, system_user_data):
         admin_id = system_user_data.get("admin_id")
         query_business_id = system_user_data.get("business_id")

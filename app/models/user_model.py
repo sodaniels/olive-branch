@@ -34,6 +34,8 @@ class User(BaseModel):
         username=None,
         system_user_id=None,
         role=None,
+        role_id=None,
+        permissions=None,
         tenant_id=None,
         type=None,
         last_login=None,
@@ -64,6 +66,8 @@ class User(BaseModel):
 
         self.system_user_id = ObjectId(system_user_id) if system_user_id else None
         self.role = ObjectId(role) if role else None
+        self.role_id = ObjectId(role_id) if role else None
+        self.permissions = permissions if permissions else {}
         
         if branch_id:
             self.branch_id = ObjectId(branch_id)
@@ -168,6 +172,8 @@ class User(BaseModel):
                 "branch_id": getattr(self, "branch_id", None),
                 "member_id": getattr(self, "member_id", None),
                 "role": self.role,
+                "role_id": self.role_id,
+                "permissions": self.permissions,
                 "type": self.type,
                 "business_id": self.business_id,
                 "fullname": self.fullname,
