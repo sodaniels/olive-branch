@@ -126,6 +126,7 @@ from .church.report_resource import blp_report
 from .church.pledge_resource import blp_pledge
 from .church.form_resource import blp_form
 from .church.portal_resource import blp_portal
+from .church.page_builder_resource import blp_page_builder
 
 __all__ = [
     #-------------------
@@ -204,6 +205,7 @@ __all__ = [
     "blp_pledge",
     "blp_form",
     "blp_portal",
+    "blp_page_builder",
     #-------------------
     #ADMIN ROUTES
     #-------------------
