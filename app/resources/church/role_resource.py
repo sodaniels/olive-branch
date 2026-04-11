@@ -21,7 +21,9 @@ from ...schemas.church.role_schema import (
     ValidatePermissionsSchema,
 )
 from ...utils.json_response import prepared_response
-from ...utils.helpers import make_log_tag, _resolve_business_id
+from ...utils.helpers import (
+    make_log_tag, _resolve_business_id, stringify_object_ids
+)
 from ...utils.logger import Log
 
 blp_role = Blueprint("roles", __name__, description="User roles, permissions, and access control")

@@ -246,7 +246,7 @@ class Role(BaseModel):
     
     @classmethod
     def get_users_by_role(cls, business_id, role_key=None, role_id=None, branch_id=None):
-        """Get all users with a specific role."""
+        """Get all users with a specific role, with decrypted fields."""
         try:
             users_coll = db.get_collection("users")
             q = {"business_id": ObjectId(business_id)}
@@ -257,16 +257,41 @@ class Role(BaseModel):
             if branch_id:
                 q["branch_id"] = ObjectId(branch_id)
             cursor = users_coll.find(q, {"password": 0, "hashed_password": 0}).sort("created_at", -1)
+
+            FIELDS_TO_DECRYPT = ["fullname", "email", "phone_number", "status"]
+            FIELDS_TO_REMOVE = [
+                "client_id", "hashed_password", "hashed_fullname",
+                "hashed_phone_number", "email_hashed", "client_id_hashed", 
+                "username_hashed",
+            ]
+
             users = []
             for d in cursor:
-                for f in ["_id", "business_id", "branch_id", "role_id"]:
-                    if d.get(f): d[f] = str(d[f])
+                # Remove sensitive/internal fields
+                for f in FIELDS_TO_REMOVE:
+                    d.pop(f, None)
+
+                # Decrypt encrypted fields
+                for f in FIELDS_TO_DECRYPT:
+                    val = d.get(f)
+                    if val and isinstance(val, str) and len(val) > 30:
+                        try:
+                            d[f] = decrypt_data(val)
+                        except Exception:
+                            pass  # Leave as-is if not actually encrypted
+
+                # Stringify all ObjectId fields
+                for key, val in d.items():
+                    if isinstance(val, ObjectId):
+                        d[key] = str(val)
+
                 users.append(d)
             return users
         except Exception as e:
             Log.error(f"[Role.get_users_by_role] {e}")
             return []
-
+        
+        
     @classmethod
     def update(cls, role_id, business_id, **updates):
         updates["updated_at"] = datetime.utcnow()
