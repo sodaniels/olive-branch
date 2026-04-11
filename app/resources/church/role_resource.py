@@ -126,6 +126,9 @@ class RoleCreateResource(MethodView):
         client_ip = request.remote_addr
         user_info = g.get("current_user", {}) or {}
         account_type = user_info.get("account_type")
+        
+        Log.info(f"RoleCreateResource POST called by user {user_info.get('user_id')} from IP {client_ip} with data: {account_type}")
+        
         auth_user__id = str(user_info.get("_id"))
         auth_business_id = str(user_info.get("business_id"))
         target_business_id = _resolve_business_id(user_info, json_data.get("business_id"))

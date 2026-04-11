@@ -504,7 +504,7 @@ def has_permission(user_info, module, action, branch_id=None):
     if not user_info:
         return False
 
-    account_type = user_info.get("account_type", "")
+    account_type = str.upper(user_info.get("account_type", ""))
     
     # System owner + super admin bypass
     if account_type in (ROLE_SYSTEM_OWNER, "SYSTEM_OWNER", ROLE_SUPER_ADMIN, "SUPER_ADMIN"):

@@ -110,12 +110,14 @@ class Role(BaseModel):
     @classmethod
     def get_all(cls, business_id, branch_id=None, page=1, per_page=50):
         try:
+            from ...utils.helpers import stringify_object_ids
+            
             c = db.get_collection(cls.collection_name)
             q = {"business_id": ObjectId(business_id)}
             if branch_id: q["branch_id"] = ObjectId(branch_id)
             total = c.count_documents(q)
             cursor = c.find(q).sort("created_at", -1).skip((page-1)*per_page).limit(per_page)
-            return {"roles": [cls._normalise(d) for d in cursor], "total_count": total, "total_pages": (total+per_page-1)//per_page, "current_page": page, "per_page": per_page}
+            return {"roles": [cls._normalise(stringify_object_ids(d)) for d in cursor], "total_count": total, "total_pages": (total+per_page-1)//per_page, "current_page": page, "per_page": per_page}
         except Exception as e:
             Log.error(f"[Role.get_all] {e}")
             return {"roles": [], "total_count": 0, "total_pages": 0, "current_page": page, "per_page": per_page}
@@ -164,49 +166,84 @@ class Role(BaseModel):
     @classmethod
     def assign_role_to_user(cls, business_id, user__id, role_id=None, role_key=None, branch_id=None):
         """
-        Assign a role to a user. Updates the user's account_type, permissions,
-        and optionally branch_permissions.
+        Assign a role to a user. Updates:
+        - users collection: account_type, permissions, role_id, branch_permissions
+        - admins collection: role (the role_id field on admin), account_type
         """
         try:
-            from ..doseal.admin.admin_business_model import AdminBusiness
             users_coll = db.get_collection("users")
+            admins_coll = db.get_collection("admins")
 
             if role_id:
-                # Custom role
                 custom_role = cls.get_by_id(role_id, business_id)
                 if not custom_role:
                     return {"success": False, "error": "Custom role not found."}
-                update = {
-                    "account_type": custom_role.get("base_role", "MEMBER"),
-                    "permissions": custom_role.get("permissions", {}),
-                    "role_id": ObjectId(role_id),
+
+                role_id_obj = ObjectId(role_id)
+                account_type_value = custom_role.get("base_role", "MEMBER")
+                permissions_value = custom_role.get("permissions", {})
+
+                user_update = {
+                    "account_type": account_type_value,
+                    "permissions": permissions_value,
+                    "role_id": role_id_obj,
                     "updated_at": datetime.utcnow(),
                 }
                 if custom_role.get("branch_permissions"):
-                    update["branch_permissions"] = custom_role["branch_permissions"]
-            elif role_key:
-                # System role
-                if role_key not in ROLE_PERMISSIONS:
-                    return {"success": False, "error": f"Unknown role: {role_key}"}
-                update = {
-                    "account_type": role_key,
-                    "permissions": ROLE_PERMISSIONS[role_key],
+                    user_update["branch_permissions"] = custom_role["branch_permissions"]
+
+                admin_update = {
+                    "role": role_id_obj,
+                    "account_type": account_type_value,
                     "updated_at": datetime.utcnow(),
                 }
-                # Remove custom role reference
-                update["role_id"] = None
+
+            elif role_key:
+                if role_key not in ROLE_PERMISSIONS:
+                    return {"success": False, "error": f"Unknown role: {role_key}"}
+
+                user_update = {
+                    "account_type": role_key,
+                    "permissions": ROLE_PERMISSIONS[role_key],
+                    "role_id": None,
+                    "updated_at": datetime.utcnow(),
+                }
+
+                admin_update = {
+                    "role": None,
+                    "account_type": role_key,
+                    "updated_at": datetime.utcnow(),
+                }
+
             else:
                 return {"success": False, "error": "Provide either role_id or role_key."}
 
-            result = users_coll.update_one(
+            user_result = users_coll.update_one(
                 {"_id": ObjectId(user__id), "business_id": ObjectId(business_id)},
-                {"$set": update},
+                {"$set": user_update},
             )
-            return {"success": result.modified_count > 0}
+
+            admin_result = admins_coll.update_one(
+                {"user__id": ObjectId(user__id), "business_id": ObjectId(business_id)},
+                {"$set": admin_update},
+            )
+
+            user_updated = user_result.modified_count > 0
+            admin_updated = admin_result.modified_count > 0
+
+            if user_updated or admin_updated:
+                return {
+                    "success": True,
+                    "user_updated": user_updated,
+                    "admin_updated": admin_updated,
+                }
+
+            return {"success": False, "error": "No records updated. Check if user__id and business_id are correct."}
+
         except Exception as e:
             Log.error(f"[Role.assign_role_to_user] {e}")
             return {"success": False, "error": str(e)}
-
+    
     @classmethod
     def get_users_by_role(cls, business_id, role_key=None, role_id=None, branch_id=None):
         """Get all users with a specific role."""
