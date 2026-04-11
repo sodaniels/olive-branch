@@ -52,3 +52,4 @@ def require_permission(module, action):
             return f(*args, **kwargs)
         return wrapper
     return decorator
+
