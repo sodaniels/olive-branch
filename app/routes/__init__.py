@@ -77,6 +77,7 @@ from ..resources import (
     blp_role,
     blp_sacrament,
     blp_sermon,
+    blp_integration,
 )
 
 
@@ -310,6 +311,7 @@ def register_admin_routes(app, api):
         blp_role,
         blp_sacrament,
         blp_sermon,
+        blp_integration,
         
     ]
 

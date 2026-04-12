@@ -130,6 +130,7 @@ from .church.page_builder_resource import blp_page_builder
 from .church.role_resource import blp_role
 from .church.sacrament_resource import blp_sacrament
 from .church.sermon_resource import blp_sermon
+from .church.integration_resource import blp_integration
 
 __all__ = [
     #-------------------
@@ -212,6 +213,7 @@ __all__ = [
     "blp_role",
     "blp_sacrament",
     "blp_sermon",
+    "blp_integration",
     #-------------------
     #ADMIN ROUTES
     #-------------------
